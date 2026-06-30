@@ -1,0 +1,57 @@
+name: "probelock gate"
+description: "Fail a PR when a model/quant/runtime swap regresses local-model capabilities."
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  tools:
+    description: "Path to the OpenAI-style tools JSON."
+    required: true
+  baseline:
+    description: "Committed baseline lockfile to gate against."
+    required: true
+  endpoint:
+    description: "OpenAI-compatible base URL (e.g. http://host:11434/v1)."
+    required: true
+  model:
+    description: "Model id to probe."
+    required: true
+  samples:
+    description: "Samples per probe (raise with temperature for variance)."
+    required: false
+    default: "5"
+  temperature:
+    description: "Sampling temperature."
+    required: false
+    default: "0.7"
+  max-drop:
+    description: "Regression threshold."
+    required: false
+    default: "0.05"
+  confidence:
+    description: "Only fail on drops significant at this confidence."
+    required: false
+    default: "0.95"
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+    - shell: bash
+      # Uses the published `probelock` from PyPI. To pin an unreleased revision,
+      # replace `uvx probelock` with
+      #   `uvx --from git+https://github.com/kelkalot/probelock probelock`.
+      run: |
+        uvx probelock probe \
+          --tools "${{ inputs.tools }}" \
+          --endpoint "${{ inputs.endpoint }}" \
+          --model "${{ inputs.model }}" \
+          --samples "${{ inputs.samples }}" \
+          --temperature "${{ inputs.temperature }}" \
+          -o candidate.lock
+        uvx probelock gate \
+          --baseline "${{ inputs.baseline }}" \
+          --candidate candidate.lock \
+          --max-drop "${{ inputs.max-drop }}" \
+          --confidence "${{ inputs.confidence }}"

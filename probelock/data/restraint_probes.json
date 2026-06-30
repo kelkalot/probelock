@@ -1,0 +1,14 @@
+[
+  {
+    "id": "tool_restraint::trivia",
+    "prompt": "What is the capital of France? Answer in one short sentence."
+  },
+  {
+    "id": "tool_restraint::definition",
+    "prompt": "In one sentence, explain what a hash map is."
+  },
+  {
+    "id": "tool_restraint::greeting",
+    "prompt": "Greet the user in one short, friendly sentence."
+  }
+]

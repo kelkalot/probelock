@@ -1,0 +1,54 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "create_calendar_event",
+      "description": "Create a calendar event for the user",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "start": {"type": "string", "description": "ISO 8601 datetime"},
+          "end": {"type": "string", "description": "ISO 8601 datetime"},
+          "attendees": {"type": "array", "items": {"type": "string"}},
+          "location": {"type": "string"}
+        },
+        "required": ["title", "start", "end"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_files",
+      "description": "Search the local filesystem for files matching a query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "path": {"type": "string"},
+          "max_results": {"type": "integer"},
+          "case_sensitive": {"type": "boolean"}
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_email",
+      "description": "Send an email on behalf of the user",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "to": {"type": "array", "items": {"type": "string"}},
+          "subject": {"type": "string"},
+          "body": {"type": "string"},
+          "cc": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["to", "subject", "body"]
+      }
+    }
+  }
+]

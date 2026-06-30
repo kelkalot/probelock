@@ -1,0 +1,19 @@
+{
+  "label": "llama-3.1-8b @ Q4_K_M (ollama)",
+  "model": "llama-3.1-8b",
+  "quant": "Q4_K_M",
+  "runtime": "ollama",
+  "capabilities": {
+    "tool_selection": 0.67,
+    "tool_discrimination": 0.33,
+    "needle_in_tools": 0.33,
+    "arity_robustness": 0.67,
+    "arg_validity": 0.67,
+    "required_args": 1.0,
+    "structured_output": 0.33,
+    "tool_restraint": 0.67,
+    "tool_permission": 0.67,
+    "no_hallucinated_tool": 0.67,
+    "format_adherence": 1.0
+  }
+}

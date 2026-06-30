@@ -1,0 +1,28 @@
+name: release
+
+# Publish to PyPI via Trusted Publishing (OIDC) — no API tokens stored.
+# One-time setup on PyPI: add a "pending publisher" for project `probelock`
+# (owner: kelkalot, repository: probelock, workflow: release.yml).
+# Then push a tag like `v0.1.0` (or run this workflow manually) to publish.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # actions/checkout needs this for a private repo
+                       # (declaring any permission defaults all others to `none`)
+      id-token: write  # required to mint the OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Check metadata
+        run: uvx twine check dist/*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

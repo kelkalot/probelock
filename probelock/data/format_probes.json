@@ -1,0 +1,12 @@
+[
+  {
+    "id": "format_adherence::one_word_yesno",
+    "prompt": "Is water wet? Reply with exactly one word in uppercase: YES or NO. No punctuation, no other text.",
+    "expected_text": "YES"
+  },
+  {
+    "id": "format_adherence::exact_token",
+    "prompt": "Reply with exactly this token and nothing else: ACK",
+    "expected_text": "ACK"
+  }
+]
