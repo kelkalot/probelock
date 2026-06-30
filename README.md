@@ -206,8 +206,19 @@ gate each candidate:
        --baseline probelock.lock --candidate candidate.lock --max-drop 0.05 --confidence 0.95
 ```
 
-A composite GitHub Action ([`action.yml`](action.yml)) wraps those two steps. To
-show the result on a pull request, render the diff as Markdown (or `--format html`
+Or use the composite GitHub Action ([`action.yml`](action.yml)), which wraps those
+two steps end-to-end:
+
+```yaml
+- uses: kelkalot/probelock@v0
+  with:
+    tools: tools.json
+    baseline: probelock.lock
+    endpoint: ${{ secrets.LLM_ENDPOINT }}
+    model: ${{ vars.LLM_MODEL }}
+```
+
+To show the result on a pull request, render the diff as Markdown (or `--format html`
 for a self-contained page):
 
 ```bash
