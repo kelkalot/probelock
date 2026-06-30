@@ -1,5 +1,10 @@
 # probelock
 
+[![PyPI](https://img.shields.io/pypi/v/probelock.svg)](https://pypi.org/project/probelock/)
+[![Python](https://img.shields.io/pypi/pyversions/probelock.svg)](https://pypi.org/project/probelock/)
+[![CI](https://github.com/kelkalot/probelock/actions/workflows/ci.yml/badge.svg)](https://github.com/kelkalot/probelock/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **A capability lockfile for local models.** It records what a model does on a set
 of tool-calling and output checks, and fails CI when a model/quant/runtime swap
 lowers a score.
