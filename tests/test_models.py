@@ -53,6 +53,22 @@ def test_roundtrip_preserves_fields():
     assert back.tools_fingerprint == "abc123"
 
 
+def test_roundtrip_preserves_traces_fingerprint():
+    original = Lockfile.from_dict({
+        "capabilities": {"a": 1.0},
+        "results": [], "n_probes": 0,
+        "traces_fingerprint": "abc123",
+    })
+    back = Lockfile.from_dict(original.to_dict())
+    assert back.traces_fingerprint == "abc123"
+
+
+def test_traces_fingerprint_defaults_to_none():
+    lf = Lockfile.from_dict({"capabilities": {"a": 1.0}, "results": [], "n_probes": 0})
+    assert lf.traces_fingerprint is None
+    assert lf.to_dict()["traces_fingerprint"] is None
+
+
 def test_roundtrip_preserves_per_result_error_field():
     original = Lockfile.from_dict({
         "capabilities": {"tool_restraint": 1.0},

@@ -177,6 +177,61 @@ checks for a given tool) hit the network once. The `SimulatedClient` crafts corr
 incorrect responses that the real scorers grade, so the scoring path runs even
 with no model present.
 
+## Deriving probes from real traces (experimental)
+
+Schema-derived probes are single-turn and synthetic — great for catching schema-level
+regressions, blind to what breaks after several turns of real context, a tool result
+feeding back in, or ambiguous phrasing. `--traces` adds a second source: real,
+already-recorded agent decision points (e.g. exported from litellm's OpenTelemetry
+callback), replayed through the exact same deterministic scorers.
+
+```bash
+uv run probelock derive --tools tools.json --traces traces.json      # see what gets added
+uv run probelock probe  --tools tools.json --traces traces.json \
+    --endpoint http://localhost:11434/v1 --model llama3.1:8b -o candidate.lock
+```
+
+A traces file is a small, stable JSON schema probelock defines itself — **not** raw
+OpenTelemetry — because OTel's own span attribute layout isn't stable across libraries or
+versions (litellm has already changed where it puts request/response attributes once, and
+has a newer, differently-shaped opt-in integration). Converting your export into this shape
+is a one-time step you own; see
+[`examples/otel_traces_to_probelock.py`](examples/otel_traces_to_probelock.py) for a
+documented starting point and [`fixtures/sample_traces.json`](fixtures/sample_traces.json)
+for the target shape:
+
+```json
+{
+  "version": 1,
+  "records": [
+    {
+      "id": "checkout-flow-turn-3",
+      "messages": [{"role": "user", "content": "..."}],
+      "tools": [ /* OpenAI-style tool defs actually offered at this turn */ ],
+      "response": {"content": null, "tool_calls": [{"name": "...", "arguments": "{...}"}]}
+    }
+  ]
+}
+```
+
+Trace-derived probes join the *same* capabilities as schema-derived ones — `tool_selection`,
+`tool_discrimination`, `arg_validity`, `required_args`, and `structured_output` — since these
+map cleanly onto "replay this real context, check the candidate still behaves validly" (probe
+ids carry a `::traced::` marker if you want to inspect the split). The rest stay purely
+schema-derived: `needle_in_tools`, `tool_permission`, `no_hallucinated_tool`, and
+`tool_restraint` need a synthetic perturbation (an injected distractor tool, a forbidden-tool
+instruction, a removed tool) that a passively recorded trace doesn't naturally contain;
+`format_adherence` needs an exact-text prompt, not a tool-calling decision point; and
+`arity_robustness` needs its own explicit "fill EVERY parameter, including optional ones"
+instruction to mean anything — a real conversation was never asked for that, so replaying it
+would only test whichever optional fields happened to get filled in that one exchange, not
+robustness.
+
+**Unlike a tool schema, a traces file contains real conversation content.** `probe --traces`
+prints a warning every time, and the lockfile records a `traces_fingerprint` so a `diff`
+flags a baseline/candidate pair whose trace inputs differ — but review and redact the file
+yourself before committing it, the same way you'd review any fixture with real data in it.
+
 ## Sampling & noisy gates
 
 With one sample per probe, a capability backed by 3 tools quantizes to
@@ -230,6 +285,9 @@ probelock diff probelock.lock candidate.lock --format markdown >> "$GITHUB_STEP_
 - A `--json-mode` `structured_output` probe (`response_format`) beside the strict prompt path.
 - Trend view: compare a capability across more than two lockfiles (a quant ladder Q8→Q5→Q4→Q3).
 - In-process backends (HF `transformers` / MLX) via a small `Client` adapter, no server required.
+- Emit OpenTelemetry spans from `probe` runs, so a probe run shows up alongside your other
+  agent traces in whatever backend you already use — a follow-on to trace-derived probes
+  above (that direction consumes traces; this one produces them).
 
 ## License
 

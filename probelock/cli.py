@@ -19,6 +19,7 @@ from .diff import diff_lockfiles, error_derived_negative_capabilities
 from .lockfile import read_lockfile, write_lockfile
 from .probes import derive_probes, tools_fingerprint
 from .runner import run_probes
+from .traces import derive_traced_probes, load_trace_records, traces_fingerprint
 
 app = typer.Typer(
     add_completion=False,
@@ -36,6 +37,11 @@ def _err(msg: str) -> None:
 
 
 _BAR = 24
+
+_TRACES_OPTION = typer.Option(
+    None, "--traces", help="Optional trace-export JSON to add real, replayed decision "
+    "points to the battery (see README: Deriving probes from real traces)."
+)
 
 
 def _bar(score: float) -> str:
@@ -86,12 +92,31 @@ def _load_json_or_exit(path: Path, what: str):
         raise typer.Exit(2)
 
 
+def _load_traces_or_exit(path: Path):
+    """Load a trace-export file, converting any bad-input error to a clean Exit(2) —
+    same convention as _load_tools_or_exit/_load_json_or_exit."""
+    try:
+        return load_trace_records(path)
+    except FileNotFoundError:
+        _err(f"Traces file not found: {path}")
+        raise typer.Exit(2)
+    except OSError as exc:
+        _err(f"Could not read traces file {path}: {exc}")
+        raise typer.Exit(2)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        _err(f"Invalid traces file {path}: {exc}")
+        raise typer.Exit(2)
+
+
 @app.command()
 def derive(
     tools: Path = typer.Option(..., "--tools", "-t", help="OpenAI-style tools JSON file."),
+    traces: Optional[Path] = _TRACES_OPTION,
 ) -> None:
     """Show the probe battery that would be generated from a toolset (transparency)."""
     probes = derive_probes(_load_tools_or_exit(tools))
+    if traces is not None:
+        probes = probes + derive_traced_probes(_load_traces_or_exit(traces))
     table = Table(title=f"{len(probes)} probes derived", expand=True)
     table.add_column("Probe id", no_wrap=True)
     table.add_column("Capability", no_wrap=True)
@@ -127,11 +152,24 @@ def probe(
     ),
     label: Optional[str] = typer.Option(None, "--label", help="Override the lockfile label."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Write the lockfile here."),
+    traces: Optional[Path] = _TRACES_OPTION,
 ) -> None:
     """Run the probe battery and produce a capability lockfile."""
     tool_list = _load_tools_or_exit(tools)
     probes = derive_probes(tool_list)
     fingerprint = tools_fingerprint(tool_list)
+
+    traces_fp = None
+    if traces is not None:
+        records = _load_traces_or_exit(traces)
+        traced_probes = derive_traced_probes(records)
+        probes = probes + traced_probes
+        traces_fp = traces_fingerprint(records)
+        err_console.print(
+            f"[yellow]{len(traced_probes)} probe(s) derived from real trace content in "
+            f"{traces} — this may contain real user data; review before committing the "
+            f"traces file or the resulting lockfile.[/]"
+        )
 
     try:
         if simulate is not None:
@@ -158,7 +196,10 @@ def probe(
         raise typer.Exit(2)
 
     try:
-        lock = run_probes(client, probes, fingerprint, __version__, samples=samples)
+        lock = run_probes(
+            client, probes, fingerprint, __version__, samples=samples,
+            traces_fingerprint=traces_fp,
+        )
     except ClientError as exc:
         _err(str(exc))
         raise typer.Exit(2)
@@ -257,6 +298,8 @@ def _diff_notes(result, b, c):
     notes = []
     if result.tools_changed:
         notes.append("⚠ toolsets differ — comparison may not be apples-to-apples.")
+    if result.traces_changed:
+        notes.append("⚠ trace inputs differ — comparison may not be apples-to-apples.")
     if b.model and c.model and b.model != c.model:
         notes.append(
             f"⚠ different models ({b.model} → {c.model}) — cross-model comparison, "
@@ -332,6 +375,7 @@ def _diff_payload(result, b, c) -> dict:
         "candidate": meta(c),
         "max_drop": result.max_drop,
         "tools_changed": result.tools_changed,
+        "traces_changed": result.traces_changed,
         "regressed": result.regressed,
         "rows": [
             {"capability": r.capability, "baseline": r.baseline, "candidate": r.candidate,

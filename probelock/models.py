@@ -65,6 +65,11 @@ class Lockfile:
     n_probes: int
     samples: int = 1  # samples per probe (>1 makes per-probe scores pass-rates)
     generated_at: Optional[str] = None
+    # Fingerprint of the trace-export file (probelock/traces.py), if any traced probes
+    # were included — None when the battery is purely schema-derived. Lets a diff flag a
+    # baseline/candidate pair whose real-trace inputs differ, the same way tools_fingerprint
+    # already flags a changed toolset.
+    traces_fingerprint: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -74,6 +79,7 @@ class Lockfile:
             "quant": self.quant,
             "runtime": self.runtime,
             "tools_fingerprint": self.tools_fingerprint,
+            "traces_fingerprint": self.traces_fingerprint,
             "n_probes": self.n_probes,
             "samples": self.samples,
             "generated_at": self.generated_at,
@@ -144,4 +150,5 @@ class Lockfile:
             n_probes=n_probes,
             samples=samples,
             generated_at=data.get("generated_at"),
+            traces_fingerprint=data.get("traces_fingerprint"),
         )

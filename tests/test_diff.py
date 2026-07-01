@@ -64,6 +64,18 @@ def test_tools_changed_flag():
     assert diff_lockfiles(lock({"a": 1.0}, "x"), lock({"a": 1.0}, "x")).tools_changed is False
 
 
+def test_traces_changed_flag():
+    def lock_with_traces(traces_fp):
+        return Lockfile(label="l", model="m", quant="q", runtime="r", tools_fingerprint="fp",
+                         probelock_version="0", capabilities={"a": 1.0}, results=[],
+                         n_probes=0, traces_fingerprint=traces_fp)
+
+    assert diff_lockfiles(lock_with_traces(None), lock_with_traces(None)).traces_changed is False
+    assert diff_lockfiles(lock_with_traces("x"), lock_with_traces("x")).traces_changed is False
+    assert diff_lockfiles(lock_with_traces("x"), lock_with_traces("y")).traces_changed is True
+    assert diff_lockfiles(lock_with_traces(None), lock_with_traces("y")).traces_changed is True
+
+
 def test_confidence_marks_small_sample_drop_noisy():
     # 1.0 -> 0.667 across 3 probes x 1 sample = 3 trials: not significant -> 'noisy', no fail.
     result = diff_lockfiles(

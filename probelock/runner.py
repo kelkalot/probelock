@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .clients import ProbeError
 from .models import Lockfile, Probe, ProbeResult
@@ -15,6 +15,7 @@ def run_probes(
     tools_fingerprint: str,
     version: str,
     samples: int = 1,
+    traces_fingerprint: Optional[str] = None,
 ) -> Lockfile:
     client.prepare(probes)
     # Only count samples that are genuinely independent. A deterministic client
@@ -66,4 +67,5 @@ def run_probes(
         results=results,
         n_probes=len(results),
         samples=samples,
+        traces_fingerprint=traces_fingerprint,
     )

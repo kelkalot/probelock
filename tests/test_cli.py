@@ -13,6 +13,7 @@ runner = CliRunner()
 _ROOT = Path(__file__).resolve().parents[1]
 TOOLS_PATH = _ROOT / "examples" / "agent_tools.json"
 _SIM_Q8 = _ROOT / "fixtures" / "profile_q8.json"
+_SAMPLE_TRACES = _ROOT / "fixtures" / "sample_traces.json"
 
 
 def _write_lock(path, model, caps):
@@ -241,6 +242,68 @@ def test_derive_happy_path_lists_probes():
     assert result.exit_code == 0, result.output
     assert "probes derived" in result.output
     assert "tool_selection" in result.output
+
+
+def test_derive_with_traces_includes_traced_probes():
+    without = runner.invoke(app, ["derive", "--tools", str(TOOLS_PATH)])
+    with_traces = runner.invoke(
+        app, ["derive", "--tools", str(TOOLS_PATH), "--traces", str(_SAMPLE_TRACES)]
+    )
+    assert with_traces.exit_code == 0, with_traces.output
+    assert "::traced::" in with_traces.output
+    assert "::traced::" not in without.output
+
+
+def test_probe_with_traces_blends_probes_and_warns(tmp_path):
+    out = tmp_path / "blend.lock"
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8),
+        "--traces", str(_SAMPLE_TRACES), "-o", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    flattened = " ".join(result.output.split())
+    assert "derived from real trace content" in flattened
+    assert "review before committing" in flattened
+    data = json.loads(out.read_text())
+    assert data["traces_fingerprint"] is not None
+    probe_ids = {r["probe_id"] for r in data["results"]}
+    assert any("::traced::" in pid for pid in probe_ids)
+    assert any("::traced::" not in pid for pid in probe_ids)  # synthetic probes still present
+
+
+def test_probe_without_traces_leaves_traces_fingerprint_none(tmp_path):
+    out = tmp_path / "no_traces.lock"
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8), "-o", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    data = json.loads(out.read_text())
+    assert data["traces_fingerprint"] is None
+
+
+def test_probe_bad_traces_file_is_exit_2(tmp_path):
+    bad = tmp_path / "bad_traces.json"
+    bad.write_text(json.dumps({"not": "records"}))
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8), "--traces", str(bad),
+    ])
+    assert result.exit_code == 2, result.output
+
+
+def test_diff_notes_flag_differing_trace_inputs(tmp_path):
+    def write(path, traces_fp):
+        path.write_text(json.dumps({
+            "model": "m", "quant": "", "runtime": "ollama", "tools_fingerprint": "fp",
+            "traces_fingerprint": traces_fp,
+            "capabilities": {"tool_selection": 1.0}, "results": [], "n_probes": 0,
+        }))
+
+    b, c = tmp_path / "b.lock", tmp_path / "c.lock"
+    write(b, "trace-fp-1")
+    write(c, "trace-fp-2")
+    result = runner.invoke(app, ["diff", str(b), str(c)])
+    assert result.exit_code == 0, result.output
+    assert "trace inputs differ" in result.output
 
 
 def test_version_prints_version_string():

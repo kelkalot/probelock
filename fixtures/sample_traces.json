@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "source": "hand-authored example (see examples/otel_traces_to_probelock.py for a real conversion recipe)",
+  "records": [
+    {
+      "id": "schedule-followup-after-clarification",
+      "messages": [
+        {"role": "user", "content": "Can you set up a meeting with the design team?"},
+        {"role": "assistant", "content": "Sure — what time works, and how long should it run?"},
+        {"role": "user", "content": "Tomorrow 2pm to 2:30pm, title it 'Design sync'."}
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "create_calendar_event",
+            "description": "Create a calendar event for the user",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "title": {"type": "string"},
+                "start": {"type": "string", "description": "ISO 8601 datetime"},
+                "end": {"type": "string", "description": "ISO 8601 datetime"},
+                "attendees": {"type": "array", "items": {"type": "string"}},
+                "location": {"type": "string"}
+              },
+              "required": ["title", "start", "end"]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "search_files",
+            "description": "Search the local filesystem for files matching a query",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "query": {"type": "string"},
+                "path": {"type": "string"}
+              },
+              "required": ["query"]
+            }
+          }
+        }
+      ],
+      "response": {
+        "content": null,
+        "tool_calls": [
+          {
+            "name": "create_calendar_event",
+            "arguments": "{\"title\": \"Design sync\", \"start\": \"2024-05-02T14:00:00\", \"end\": \"2024-05-02T14:30:00\"}"
+          }
+        ]
+      }
+    },
+    {
+      "id": "find-config-after-error-report",
+      "messages": [
+        {"role": "user", "content": "The deploy failed and I think it's a bad config file somewhere under /etc/app."},
+        {"role": "assistant", "content": null, "tool_calls": [
+          {"function": {"name": "search_files", "arguments": "{\"query\": \"*.yaml\", \"path\": \"/etc/app\"}"}}
+        ]},
+        {"role": "tool", "name": "search_files", "content": "[\"/etc/app/prod.yaml\", \"/etc/app/staging.yaml\"]"},
+        {"role": "user", "content": "It's the prod one — can you find anything with 'timeout' in it under that same path?"}
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "search_files",
+            "description": "Search the local filesystem for files matching a query",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "query": {"type": "string"},
+                "path": {"type": "string"},
+                "max_results": {"type": "integer"},
+                "case_sensitive": {"type": "boolean"}
+              },
+              "required": ["query"]
+            }
+          }
+        }
+      ],
+      "response": {
+        "content": null,
+        "tool_calls": [
+          {"name": "search_files", "arguments": "{\"query\": \"timeout\", \"path\": \"/etc/app\"}"}
+        ]
+      }
+    },
+    {
+      "id": "emit-event-json-instead-of-calling",
+      "messages": [
+        {"role": "user", "content": "Don't create it yet — just show me the JSON you'd send to create_calendar_event for 'Retro' tomorrow 10-11am."}
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "create_calendar_event",
+            "description": "Create a calendar event for the user",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "title": {"type": "string"},
+                "start": {"type": "string", "description": "ISO 8601 datetime"},
+                "end": {"type": "string", "description": "ISO 8601 datetime"}
+              },
+              "required": ["title", "start", "end"]
+            }
+          }
+        }
+      ],
+      "response": {
+        "content": "{\"title\": \"Retro\", \"start\": \"2024-05-03T10:00:00\", \"end\": \"2024-05-03T11:00:00\"}",
+        "tool_calls": []
+      }
+    }
+  ]
+}

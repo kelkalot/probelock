@@ -30,6 +30,7 @@ class DiffRow:
 class DiffResult:
     rows: List[DiffRow]
     tools_changed: bool
+    traces_changed: bool
     max_drop: float
 
     # A dropped capability ("removed") is a silent regression too — the gate
@@ -112,5 +113,6 @@ def diff_lockfiles(
     return DiffResult(
         rows=rows,
         tools_changed=baseline.tools_fingerprint != candidate.tools_fingerprint,
+        traces_changed=baseline.traces_fingerprint != candidate.traces_fingerprint,
         max_drop=max_drop,
     )
