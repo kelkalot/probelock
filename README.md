@@ -232,6 +232,11 @@ prints a warning every time, and the lockfile records a `traces_fingerprint` so 
 flags a baseline/candidate pair whose trace inputs differ — but review and redact the file
 yourself before committing it, the same way you'd review any fixture with real data in it.
 
+Tested against a real llama.cpp regression (commit-level, not synthetic): `gate` fails on
+the regressed commit and passes on an adjacent, unrelated commit. See
+[`VALIDATION.md`](VALIDATION.md) for the test setup and results, and
+[`fixtures/gptoss_regression_trace.json`](fixtures/gptoss_regression_trace.json) to reproduce it.
+
 ## Sampling & noisy gates
 
 With one sample per probe, a capability backed by 3 tools quantizes to

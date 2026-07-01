@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "source": "hand-crafted reproduction of ggml-org/llama.cpp issue #19703 / #20500 (regression commit 566059a26b0ce8faec4ea053605719d399c64cc5) \u2014 an assistant message carrying both reasoning_content and tool_calls, replayed back in a later turn's history, is what common_chat_params_init_gpt_oss must render without erasing 'content' from the adjusted message; the lost erase() call throws 'Cannot pass both content and thinking' on the regressed commit.",
+  "records": [
+    {
+      "id": "gpt-oss-reasoning-plus-tool-call-in-history",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What's the weather in NYC right now, and then check my calendar for tomorrow?"
+        },
+        {
+          "role": "assistant",
+          "content": "Let me check the weather for you.",
+          "reasoning_content": "I should look up the current weather in NYC first before checking the calendar.",
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"location\": \"NYC\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_1",
+          "content": "{\"temp_f\": 72, \"condition\": \"sunny\"}"
+        },
+        {
+          "role": "user",
+          "content": "Great, now check my calendar for tomorrow please."
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a location",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "location": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "location"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "check_calendar",
+            "description": "Check the user's calendar for a given day",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "description": "e.g. 'tomorrow' or an ISO date"
+                }
+              },
+              "required": [
+                "date"
+              ]
+            }
+          }
+        }
+      ],
+      "response": {
+        "content": null,
+        "tool_calls": [
+          {
+            "name": "check_calendar",
+            "arguments": "{\"date\": \"tomorrow\"}"
+          }
+        ]
+      }
+    }
+  ]
+}
