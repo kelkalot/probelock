@@ -4,7 +4,14 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from probelock.probes import derive_probes, synth_args, synth_value, tools_fingerprint
+from probelock.probes import (
+    _number_value,
+    derive_probes,
+    synth_all_args,
+    synth_args,
+    synth_value,
+    tools_fingerprint,
+)
 
 CONSTRAINED_SCHEMA = {
     "type": "object",
@@ -80,6 +87,65 @@ def test_synth_value_resolves_ref_and_const_and_enum():
     assert synth_value({"$ref": "#/$defs/P"}, root) == "x"
     assert synth_value({"const": 7}) == 7
     assert synth_value({"type": "string", "enum": ["a", "b"]}) == "a"
+
+
+def test_synth_value_merges_allOf_branches():
+    # allOf requires satisfying every branch simultaneously; taking only the first
+    # branch (as anyOf/oneOf correctly do) used to drop a later branch's required
+    # property, producing a reference value that fails its own schema.
+    schema = {
+        "allOf": [
+            {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+            {"type": "object", "properties": {"b": {"type": "integer"}}, "required": ["b"]},
+        ]
+    }
+    value = synth_value(schema)
+    jsonschema.validate(value, schema)  # must not raise
+    assert "a" in value and "b" in value
+
+
+def test_synth_args_handles_nested_allOf_property():
+    # The realistic trigger: allOf extending a $ref'd base schema on a NESTED property.
+    schema = {
+        "type": "object",
+        "properties": {
+            "x": {
+                "allOf": [
+                    {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+                    {"type": "object", "properties": {"b": {"type": "integer"}}, "required": ["b"]},
+                ]
+            }
+        },
+        "required": ["x"],
+    }
+    jsonschema.validate(synth_args(schema), schema)
+
+
+def test_number_value_never_undershoots_minimum_for_unsatisfiable_multiple_of():
+    # No multiple of 10 exists in [1, 9]; the synthesized value must still respect the
+    # minimum rather than silently flooring below it (there's no value that can satisfy
+    # both bounds, but underflowing the minimum is strictly worse than overflowing the
+    # maximum since minimum violations are the more common real-world constraint).
+    value = _number_value({"minimum": 1, "maximum": 9, "multipleOf": 10}, integer=True)
+    assert value >= 1
+
+
+def test_synth_all_args_fills_nested_optional_properties():
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "settings": {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+                "required": ["a"],
+            },
+        },
+        "required": ["name"],
+    }
+    full = synth_all_args(schema)
+    assert "b" in full["settings"]  # optional nested property is filled too, not just "a"
+    jsonschema.validate(full, schema)
 
 
 def test_duplicate_tool_names_raise():

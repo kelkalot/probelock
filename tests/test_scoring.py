@@ -86,6 +86,64 @@ def test_arity_robustness():
     assert scoring.score(p, partial) == 0.0  # one optional dropped -> fails
 
 
+def test_arity_robustness_zero_arg_tool_requires_a_call():
+    # A 0-property tool must still be CALLED to earn credit; "nothing to fill" is not
+    # the same as "the model demonstrated it can fill every parameter."
+    schema = {"type": "object", "properties": {}}
+    p = Probe(id="arity_robustness::t", capability="arity_robustness", description="",
+              messages=[], tools=[], expected_tool="t", schema=schema)
+    assert scoring.score(p, ResponseMessage(tool_calls=[ToolCall("t", "{}")])) == 1.0
+    assert scoring.score(p, ResponseMessage(content="no call")) == 0.0
+
+
+def test_arity_robustness_checks_nested_optional_properties():
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "settings": {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+                "required": ["a"],
+            },
+        },
+        "required": ["name"],
+    }
+    p = Probe(id="arity_robustness::t", capability="arity_robustness", description="",
+              messages=[], tools=[], expected_tool="t", schema=schema)
+    missing_nested_optional = ResponseMessage(tool_calls=[ToolCall(
+        "t", json.dumps({"name": "x", "settings": {"a": "y"}})  # nested "b" omitted
+    )])
+    full = ResponseMessage(tool_calls=[ToolCall(
+        "t", json.dumps({"name": "x", "settings": {"a": "y", "b": 1}})
+    )])
+    assert scoring.score(p, missing_nested_optional) == 0.0
+    assert scoring.score(p, full) == 1.0
+
+
+def test_required_args_forced_empty_value_can_pass():
+    # A schema whose only valid value for a required property IS empty (maxItems: 0)
+    # must not be permanently unwinnable — the emptiness heuristic exists to catch a
+    # lazy non-answer, not to reject the value the schema itself demands.
+    schema = {
+        "type": "object",
+        "properties": {"tags": {"type": "array", "maxItems": 0}},
+        "required": ["tags"],
+    }
+    p = Probe(id="required_args::t", capability="required_args", description="",
+              messages=[], tools=[], expected_tool="t", schema=schema)
+    resp = ResponseMessage(tool_calls=[ToolCall("t", json.dumps({"tags": []}))])
+    assert scoring.score(p, resp) == 1.0
+
+
+def test_arity_robustness_forced_empty_value_can_pass():
+    schema = {"type": "object", "properties": {"note": {"const": ""}}}
+    p = Probe(id="arity_robustness::t", capability="arity_robustness", description="",
+              messages=[], tools=[], expected_tool="t", schema=schema)
+    resp = ResponseMessage(tool_calls=[ToolCall("t", json.dumps({"note": ""}))])
+    assert scoring.score(p, resp) == 1.0
+
+
 def test_arg_validity():
     p = tool_probe("arg_validity")
     good = ResponseMessage(tool_calls=[ToolCall("t", json.dumps({"title": "x", "start": "y"}))])

@@ -31,6 +31,48 @@ def _parse_args(call: ToolCall):
     return args if isinstance(args, dict) else None
 
 
+def _forced_empty(prop_schema, empty_value) -> bool:
+    """True if `prop_schema` structurally cannot be satisfied by anything but the given
+    empty value (const/enum pinned to it, or a max-size bound of 0) — i.e. an empty
+    response for this property is the CORRECT answer, not a lazy non-answer."""
+    if not isinstance(prop_schema, dict):
+        return False
+    if "const" in prop_schema:
+        return prop_schema["const"] == empty_value
+    if prop_schema.get("enum"):
+        return all(v == empty_value for v in prop_schema["enum"])
+    if empty_value == [] and prop_schema.get("maxItems") == 0:
+        return True
+    if empty_value == "" and prop_schema.get("maxLength") == 0:
+        return True
+    return False
+
+
+def _is_unfilled(value, prop_schema=None) -> bool:
+    """True if `value` looks like a lazy non-answer (missing, or empty where the schema
+    doesn't force emptiness) rather than a genuine filled-in argument."""
+    if value is None:
+        return True
+    if isinstance(value, (str, list, dict)) and len(value) == 0:
+        return not _forced_empty(prop_schema, value)
+    return False
+
+
+def _all_filled(props_schema, args) -> bool:
+    """True if every property in `props_schema` (required + optional) is present and
+    filled in `args`, recursing into nested object-typed properties so an optional field
+    nested inside a filled-in object argument is checked too, not just top-level keys."""
+    if not isinstance(args, dict):
+        return False
+    for key, sub in (props_schema or {}).items():
+        if key not in args or _is_unfilled(args[key], sub):
+            return False
+        if isinstance(sub, dict) and sub.get("type") == "object" and sub.get("properties"):
+            if not _all_filled(sub["properties"], args[key]):
+                return False
+    return True
+
+
 def score_tool_selection(probe: Probe, resp: ResponseMessage) -> float:
     return 1.0 if _matching_calls(resp, probe.expected_tool) else 0.0
 
@@ -67,14 +109,15 @@ def score_needle_in_tools(probe: Probe, resp: ResponseMessage) -> float:
 
 def score_arity_robustness(probe: Probe, resp: ResponseMessage) -> float:
     # Did the model fill EVERY parameter (required + optional) when asked?
-    props = list(((probe.schema or {}).get("properties") or {}).keys())
+    matches = _matching_calls(resp, probe.expected_tool)
+    if not matches:
+        return 0.0  # the tool was never called at all: no credit, even for a 0-arg tool
+    props = (probe.schema or {}).get("properties") or {}
     if not props:
-        return 1.0  # nothing to fill
-    for call in _matching_calls(resp, probe.expected_tool):
+        return 1.0  # tool was called; nothing to fill
+    for call in matches:
         args = _parse_args(call)
-        if args is None:
-            continue
-        if all(key in args and args[key] not in (None, "", [], {}) for key in props):
+        if args is not None and _all_filled(props, args):
             return 1.0
     return 0.0
 
@@ -96,11 +139,12 @@ def score_arg_validity(probe: Probe, resp: ResponseMessage) -> float:
 
 def score_required_args(probe: Probe, resp: ResponseMessage) -> float:
     required = (probe.schema or {}).get("required", [])
+    props = (probe.schema or {}).get("properties") or {}
     for call in _matching_calls(resp, probe.expected_tool):
         args = _parse_args(call)
         if args is None:
             continue
-        if all(key in args and args[key] not in (None, "", [], {}) for key in required):
+        if all(key in args and not _is_unfilled(args[key], props.get(key)) for key in required):
             return 1.0
     return 0.0
 

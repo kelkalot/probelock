@@ -73,20 +73,63 @@ def _number_value(schema: Dict[str, Any], integer: bool):
     mult = schema.get("multipleOf")
     if isinstance(mult, (int, float)) and mult > 0:
         # Snap to a multiple. Ceil keeps the value >= any minimum; if that overshoots
-        # an upper bound, floor to the largest multiple within it instead.
-        value = math.ceil(value / mult) * mult
+        # an upper bound, floor to the largest multiple within it instead — but only if
+        # flooring doesn't undershoot the minimum, which would trade one violation for
+        # another. A schema with no multiple of `mult` inside [minimum, maximum] has no
+        # valid value at all; keep the minimum-respecting ceil in that degenerate case.
+        ceiled = math.ceil(value / mult) * mult
+        value = ceiled
         upper = schema.get("maximum", schema.get("exclusiveMaximum"))
-        if upper is not None and value > upper:
-            value = math.floor(upper / mult) * mult
+        if upper is not None and ceiled > upper:
+            floored = math.floor(upper / mult) * mult
+            lower = schema.get("minimum", schema.get("exclusiveMinimum"))
+            if lower is None or floored >= lower:
+                value = floored
     return int(value) if integer else float(value)
 
 
-def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None) -> Any:
+def _merge_all_of(schemas: List[Dict[str, Any]], root: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge allOf branches well enough to synthesize a value satisfying all of them.
+
+    allOf (unlike anyOf/oneOf) requires the instance to satisfy every subschema
+    simultaneously, so taking just the first branch (as anyOf/oneOf correctly do) can
+    synthesize a value missing properties required by a later branch. properties/required
+    are unioned across branches (the common real-world use: extending a $ref'd base
+    schema with more required fields); other keywords take the first branch that sets them.
+    """
+    merged: Dict[str, Any] = {}
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+    for sub in schemas:
+        if "$ref" in sub:
+            resolved = _resolve_ref(sub["$ref"], root)
+            sub = resolved if resolved is not None else {}
+        properties.update(sub.get("properties", {}) or {})
+        for r in sub.get("required", []) or []:
+            if r not in required:
+                required.append(r)
+        for key, value in sub.items():
+            if key not in ("properties", "required") and key not in merged:
+                merged[key] = value
+    if properties:
+        merged["properties"] = properties
+    if required:
+        merged["required"] = required
+    merged.setdefault("type", "object")
+    return merged
+
+
+def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None, full: bool = False) -> Any:
     """A schema-valid value for a property (deterministic, no randomness).
 
     Honors const/enum/$ref and basic numeric/length/array bounds, not just the
     bare ``type`` keyword — so synthesized args validate against constrained real
     tool schemas (enums, Pydantic $defs) rather than only trivial ones.
+
+    ``full``, threaded through every recursive call, switches object synthesis from
+    "required properties only" to "every property, required and optional" — used by
+    synth_all_args so nested object-typed properties are filled completely too, not just
+    at the top level.
     """
     root = schema if root is None else root
     if "const" in schema:
@@ -96,11 +139,13 @@ def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None) -> Any:
     if "$ref" in schema:
         resolved = _resolve_ref(schema["$ref"], root)
         if resolved is not None:
-            return synth_value(resolved, root)
-    # anyOf/oneOf/allOf: take the first branch we can satisfy.
-    for combiner in ("anyOf", "oneOf", "allOf"):
+            return synth_value(resolved, root, full)
+    if schema.get("allOf"):
+        return synth_value(_merge_all_of(schema["allOf"], root), root, full)
+    # anyOf/oneOf: any one satisfying branch is valid, so take the first.
+    for combiner in ("anyOf", "oneOf"):
         if schema.get(combiner):
-            return synth_value(schema[combiner][0], root)
+            return synth_value(schema[combiner][0], root, full)
 
     t = schema.get("type")
     if isinstance(t, list):
@@ -117,15 +162,12 @@ def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None) -> Any:
         item = schema.get("items")
         count = schema.get("minItems", 0)
         if item:
-            return [synth_value(item, root) for _ in range(max(count, 1))]
+            return [synth_value(item, root, full) for _ in range(max(count, 1))]
         return ["example"] * count
     if t == "object":
-        req = schema.get("required", [])
-        return {
-            k: synth_value(v, root)
-            for k, v in schema.get("properties", {}).items()
-            if k in req
-        }
+        props = schema.get("properties", {})
+        keys = props.keys() if full else schema.get("required", [])
+        return {k: synth_value(props[k], root, full) for k in keys if k in props}
     return "example"
 
 
@@ -140,8 +182,12 @@ def synth_args(schema: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def synth_all_args(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Every property (required AND optional), valid — for the arity stress probe."""
-    return {k: synth_value(v, schema) for k, v in schema.get("properties", {}).items()}
+    """Every property (required AND optional), valid — for the arity stress probe.
+
+    ``full=True`` propagates into nested object-typed properties too, so an optional
+    field nested inside a required object argument is filled, not just top-level ones.
+    """
+    return {k: synth_value(v, schema, full=True) for k, v in schema.get("properties", {}).items()}
 
 
 NEEDLE_PADDING = 15  # filler tools mixed in for the needle-in-tools probes

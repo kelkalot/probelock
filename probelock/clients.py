@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import re
 import urllib.error
@@ -38,6 +39,13 @@ def _clean_content(msg: Dict[str, Any]):
     if isinstance(content, str):
         content = _THINK_BLOCK.sub("", content)
     return content
+
+
+def _redact(text: str, secret: str) -> str:
+    """Strip a known secret (e.g. an api_key) out of error text before it's surfaced to
+    the console or written into a lockfile — some HTTP/SDK error reprs echo back request
+    details, and a lockfile is meant to be committed to version control."""
+    return text.replace(secret, "[REDACTED]") if secret else text
 
 
 class ClientError(RuntimeError):
@@ -180,7 +188,7 @@ class HttpClient(_EndpointClient):
             with urllib.request.urlopen(req, timeout=self.timeout) as fh:  # noqa: S310
                 payload = json.loads(fh.read())
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:300].strip()
+            detail = _redact(exc.read().decode("utf-8", "replace")[:300].strip(), self.api_key)
             if exc.code in (401, 403, 404):
                 # Configuration error (model not pulled, wrong URL, bad auth):
                 # FATAL. Scoring it as a per-probe 0 would write an all-zeros
@@ -201,11 +209,11 @@ class HttpClient(_EndpointClient):
             raise ClientError(
                 f"Could not reach {self.base_url} ({exc.reason}). Is the model server running?"
             ) from exc
-        except (TimeoutError, OSError) as exc:
-            # Read timeout or transient socket error on one probe -> recoverable.
-            raise ProbeError(
-                f"request timed out after {self.timeout:g}s (try --timeout): {exc}"
-            ) from exc
+        except (TimeoutError, OSError, http.client.HTTPException) as exc:
+            # Read timeout, a transient socket error, or a truncated/interrupted response
+            # (e.g. the model server crashed or was OOM-killed mid-generation) -> recoverable.
+            hint = " (try --timeout)" if isinstance(exc, TimeoutError) else ""
+            raise ProbeError(f"request to {self.base_url} failed: {exc}{hint}") from exc
         except (json.JSONDecodeError, ValueError) as exc:
             raise ProbeError(f"Non-JSON response from {self.base_url}: {exc}") from exc
 
@@ -425,8 +433,10 @@ class _SdkClient(_EndpointClient):
             resp = self._completion(**kwargs)
         except Exception as exc:  # noqa: BLE001 - SDKs raise varied provider errors
             # Recoverable per-probe (transient by default); an all-failed run is
-            # still caught by the all-errored fatal guard.
-            raise ProbeError(f"{self.runtime}: {exc}") from exc
+            # still caught by the all-errored fatal guard. Redact the api_key in case the
+            # SDK's exception text echoes back request/connection details — this message
+            # can end up in a committed lockfile's ProbeResult.error.
+            raise ProbeError(f"{self.runtime}: {_redact(str(exc), self._api_key)}") from exc
         return _openai_object_to_response(resp)
 
 

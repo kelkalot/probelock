@@ -37,21 +37,35 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: astral-sh/setup-uv@v5
+    - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
     - shell: bash
+      # Inputs are passed through env: and referenced as shell variables below, not
+      # interpolated directly into the script via ${{ }} — GitHub Actions expression
+      # substitution happens as literal text replacement before bash ever parses this
+      # script, so splicing an untrusted input value in directly would let shell
+      # metacharacters in that value execute as arbitrary commands in the runner.
       # Uses the published `probelock` from PyPI. To pin an unreleased revision,
       # replace `uvx probelock` with
       #   `uvx --from git+https://github.com/kelkalot/probelock probelock`.
       run: |
         uvx probelock probe \
-          --tools "${{ inputs.tools }}" \
-          --endpoint "${{ inputs.endpoint }}" \
-          --model "${{ inputs.model }}" \
-          --samples "${{ inputs.samples }}" \
-          --temperature "${{ inputs.temperature }}" \
+          --tools "$PROBELOCK_TOOLS" \
+          --endpoint "$PROBELOCK_ENDPOINT" \
+          --model "$PROBELOCK_MODEL" \
+          --samples "$PROBELOCK_SAMPLES" \
+          --temperature "$PROBELOCK_TEMPERATURE" \
           -o candidate.lock
         uvx probelock gate \
-          --baseline "${{ inputs.baseline }}" \
+          --baseline "$PROBELOCK_BASELINE" \
           --candidate candidate.lock \
-          --max-drop "${{ inputs.max-drop }}" \
-          --confidence "${{ inputs.confidence }}"
+          --max-drop "$PROBELOCK_MAX_DROP" \
+          --confidence "$PROBELOCK_CONFIDENCE"
+      env:
+        PROBELOCK_TOOLS: ${{ inputs.tools }}
+        PROBELOCK_ENDPOINT: ${{ inputs.endpoint }}
+        PROBELOCK_MODEL: ${{ inputs.model }}
+        PROBELOCK_SAMPLES: ${{ inputs.samples }}
+        PROBELOCK_TEMPERATURE: ${{ inputs.temperature }}
+        PROBELOCK_BASELINE: ${{ inputs.baseline }}
+        PROBELOCK_MAX_DROP: ${{ inputs.max-drop }}
+        PROBELOCK_CONFIDENCE: ${{ inputs.confidence }}

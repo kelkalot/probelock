@@ -18,3 +18,11 @@ def test_no_drop_is_never_significant():
 def test_unknown_trials_fail_safe_true():
     # Can't test without trial counts -> don't silence a possible regression.
     assert is_significant_regression(1.0, 0, 0.0, 0, 0.95) is True
+
+
+def test_zero_pooled_variance_fail_safe_true():
+    # p_baseline=0.01 over 10 trials rounds to 0 passes; p_candidate=0.0 is also 0
+    # passes, so the pooled proportion is exactly 0 and variance is 0 -- the z-score
+    # is undefined. This is a genuine (if tiny) drop, so the defensive branch must not
+    # silence it.
+    assert is_significant_regression(0.01, 10, 0.0, 10, 0.95) is True

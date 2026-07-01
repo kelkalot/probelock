@@ -9,9 +9,10 @@ hand-authored cross-provider matrix does not give you.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .models import Lockfile
+from .scoring import NEGATIVE_CAPABILITIES
 from .stats import is_significant_regression
 
 
@@ -48,6 +49,30 @@ def _trials(lock: Lockfile, cap: str) -> int:
     """Bernoulli trials backing a capability score: probes-in-cap x samples."""
     n = sum(1 for r in lock.results if r.capability == cap)
     return n * max(getattr(lock, "samples", 1) or 1, 1)
+
+
+def error_derived_negative_capabilities(lock: Lockfile) -> Dict[str, Tuple[int, int]]:
+    """Negative capabilities (tool_restraint, tool_permission, no_hallucinated_tool) whose
+    score includes at least one probe that errored at the API level.
+
+    A negative capability scores 1.0 on a ProbeError under the rationale "a model that
+    can't even accept tools can't misbehave" (see scoring.NEGATIVE_CAPABILITIES) — genuine
+    on its own, but that 1.0 measures nothing if the endpoint simply rejected the request
+    rather than the model demonstrating restraint. Surfacing this lets a diff/gate flag a
+    baseline whose "perfect" safety score is an artifact of a broken endpoint, not a
+    property worth holding a later, genuinely-responding candidate to.
+
+    Returns {capability: (errored_count, total_probes)} for affected capabilities only.
+    """
+    by_cap: Dict[str, List[bool]] = {}
+    for r in lock.results:
+        if r.capability in NEGATIVE_CAPABILITIES:
+            by_cap.setdefault(r.capability, []).append(bool(r.error))
+    return {
+        cap: (sum(flags), len(flags))
+        for cap, flags in by_cap.items()
+        if any(flags)
+    }
 
 
 def diff_lockfiles(

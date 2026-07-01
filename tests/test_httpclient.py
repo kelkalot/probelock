@@ -6,6 +6,7 @@ parsing — without needing a model. They run in CI.
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -191,6 +192,94 @@ def test_probe_error_is_not_cached(serve):
     with pytest.raises(ProbeError):
         client.complete(probe)
     assert client.complete(probe).content == "ok"  # retried, not a cached error
+
+
+def test_unreachable_server_raises_client_error_not_probe_error():
+    # A closed port is a fatal ClientError (config issue) -> never scored as a per-probe
+    # 0 that would silently continue the run.
+    client = HttpClient(base_url="http://127.0.0.1:1/v1", model="m", timeout=3)
+    with pytest.raises(ClientError) as excinfo:
+        client.complete(_probe())
+    assert not isinstance(excinfo.value, ProbeError)
+
+
+def test_read_timeout_raises_probe_error_not_a_crash(serve):
+    def handler(_b):
+        time.sleep(0.3)
+        return 200, {"choices": [{"message": {"content": "slow"}}]}
+
+    client = serve(handler)
+    client.timeout = 0.05
+    with pytest.raises(ProbeError):
+        client.complete(_probe())
+
+
+def test_non_json_response_raises_probe_error_not_a_crash():
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            body = b"not json at all"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    host, port = srv.server_address
+    client = HttpClient(base_url=f"http://{host}:{port}/v1", model="m")
+    try:
+        with pytest.raises(ProbeError):
+            client.complete(_probe())
+    finally:
+        srv.shutdown()
+
+
+def test_truncated_response_raises_probe_error_not_a_crash():
+    # A Content-Length that overpromises what's actually written (e.g. the model
+    # server crashes or is OOM-killed mid-generation) raises http.client.IncompleteRead,
+    # which must be classified as a recoverable per-probe failure, not left uncaught.
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            body = b'{"choices": [{"message": {"content": "ok"}}]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body) + 50))  # lie about length
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+    srv = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    host, port = srv.server_address
+    client = HttpClient(base_url=f"http://{host}:{port}/v1", model="m")
+    try:
+        with pytest.raises(ProbeError):
+            client.complete(_probe())
+    finally:
+        srv.shutdown()
+
+
+def test_api_key_is_redacted_from_error_detail(serve):
+    def handler(_b):
+        return 400, {"error": "bad request, Authorization: Bearer super-secret-key"}
+
+    client = serve(handler)
+    client.api_key = "super-secret-key"
+    with pytest.raises(ProbeError) as excinfo:
+        client.complete(_probe())
+    assert "super-secret-key" not in str(excinfo.value)
+    assert "[REDACTED]" in str(excinfo.value)
 
 
 def test_deterministic_4xx_error_is_cached(serve):

@@ -109,6 +109,18 @@ def test_sdk_client_exception_becomes_recoverable_probe_error(monkeypatch):
         AnyLlmClient(model="m", temperature=0.0).complete(_probe())
 
 
+def test_sdk_client_redacts_api_key_from_exception_message(monkeypatch):
+    def boom(**kwargs):
+        raise RuntimeError("connection failed with api_key=sk-secret-123 in headers")
+
+    monkeypatch.setattr(AnyLlmClient, "_import_completion", staticmethod(lambda: boom))
+    client = AnyLlmClient(model="m", api_key="sk-secret-123", temperature=0.0)
+    with pytest.raises(ProbeError) as excinfo:
+        client.complete(_probe())
+    assert "sk-secret-123" not in str(excinfo.value)
+    assert "[REDACTED]" in str(excinfo.value)
+
+
 def test_anyllm_missing_package_is_clean_error():
     if importlib.util.find_spec("any_llm") is not None:
         pytest.skip("any_llm installed")

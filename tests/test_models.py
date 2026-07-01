@@ -13,6 +13,11 @@ def test_from_dict_rejects_non_object():
         Lockfile.from_dict(["not", "a", "dict"])
 
 
+def test_from_dict_rejects_non_object_capabilities():
+    with pytest.raises(ValueError):
+        Lockfile.from_dict({"capabilities": ["not", "a", "dict"]})
+
+
 def test_from_dict_is_lenient_on_result_entries():
     lf = Lockfile.from_dict(
         {
@@ -46,3 +51,18 @@ def test_roundtrip_preserves_fields():
     assert back.capabilities == original.capabilities
     assert back.model == "m" and back.quant == "Q4"
     assert back.tools_fingerprint == "abc123"
+
+
+def test_roundtrip_preserves_per_result_error_field():
+    original = Lockfile.from_dict({
+        "capabilities": {"tool_restraint": 1.0},
+        "results": [
+            {"probe_id": "p", "capability": "tool_restraint", "score": 1.0, "error": "boom"},
+            {"probe_id": "p2", "capability": "tool_restraint", "score": 1.0},
+        ],
+        "n_probes": 2,
+    })
+    back = Lockfile.from_dict(original.to_dict())
+    errors = {r.probe_id: r.error for r in back.results}
+    assert errors["p"] == "boom"
+    assert errors["p2"] is None

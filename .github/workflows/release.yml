@@ -18,11 +18,14 @@ jobs:
                        # (declaring any permission defaults all others to `none`)
       id-token: write  # required to mint the OIDC token for Trusted Publishing
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      # Pinned to commit SHAs, not mutable tags/branches: this job holds id-token: write
+      # to mint the PyPI OIDC token, so a retargeted tag upstream would run unreviewed
+      # code with publish access to the `probelock` project. Bump deliberately.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
       - name: Build sdist + wheel
         run: uv build
       - name: Check metadata
         run: uvx twine check dist/*
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d # v1.14.0

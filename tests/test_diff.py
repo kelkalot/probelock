@@ -1,4 +1,4 @@
-from probelock.diff import diff_lockfiles
+from probelock.diff import diff_lockfiles, error_derived_negative_capabilities
 from probelock.models import Lockfile, ProbeResult
 
 
@@ -91,3 +91,25 @@ def test_confidence_flags_well_sampled_drop_as_regression():
 def test_without_confidence_threshold_behaviour_unchanged():
     result = diff_lockfiles(lock_with({"a": 1.0}), lock_with({"a": 0.667}), max_drop=0.05)
     assert result.regressed is True
+
+
+def test_error_derived_negative_capabilities_flags_error_backed_scores():
+    # tool_restraint's 1.0 here is a placeholder from an API rejection, not genuine
+    # model behavior (see scoring.NEGATIVE_CAPABILITIES) -- surface it as low-confidence.
+    results = [
+        ProbeResult("tool_restraint::a", "tool_restraint", 1.0, error="model does not support tools"),
+        ProbeResult("tool_restraint::b", "tool_restraint", 1.0, error=None),
+        ProbeResult("tool_selection::a", "tool_selection", 0.0, error="model does not support tools"),
+    ]
+    lf = Lockfile(label="l", model="m", quant="q", runtime="r", tools_fingerprint="fp",
+                  probelock_version="0", capabilities={"tool_restraint": 1.0, "tool_selection": 0.0},
+                  results=results, n_probes=len(results))
+    assert error_derived_negative_capabilities(lf) == {"tool_restraint": (1, 2)}
+
+
+def test_error_derived_negative_capabilities_empty_when_no_errors():
+    results = [ProbeResult("tool_restraint::a", "tool_restraint", 1.0, error=None)]
+    lf = Lockfile(label="l", model="m", quant="q", runtime="r", tools_fingerprint="fp",
+                  probelock_version="0", capabilities={"tool_restraint": 1.0},
+                  results=results, n_probes=len(results))
+    assert error_derived_negative_capabilities(lf) == {}
