@@ -27,5 +27,13 @@ jobs:
         run: uv build
       - name: Check metadata
         run: uvx twine check dist/*
+      # `uv publish` instead of pypa/gh-action-pypi-publish: that action is a Docker
+      # container action whose ghcr image is pulled by the *git ref it's pinned to*,
+      # and pypa prunes old SHA-tagged images — the v0.2.0 release failed with
+      # "manifest unknown" on a SHA pin that had worked three days earlier. uv is
+      # already in this job (SHA-pinned above) and speaks Trusted Publishing natively,
+      # so publishing needs no third-party action at all. `--trusted-publishing always`
+      # fails loudly if the OIDC token is unavailable instead of falling back to
+      # token auth.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d # v1.14.0
+        run: uv publish --trusted-publishing always
