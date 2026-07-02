@@ -10,10 +10,13 @@ Three tests of probelock's regression detection against real local models on a
   regression, as ground truth.
 
 The regression replay ships a reproducible fixture in this repo
-([`fixtures/gptoss_regression_trace.json`](fixtures/gptoss_regression_trace.json)).
-The quantization ladder and runtime comparison are reported here with the exact
-commands used, but require external model downloads (40+ GB combined) not
-bundled in the repo.
+([`fixtures/gptoss_regression_trace.json`](fixtures/gptoss_regression_trace.json)),
+as does the harder tool schema used in the quantization ladder follow-up
+([`fixtures/hard_agent_tools.json`](fixtures/hard_agent_tools.json)). Both
+still require an external model download to run against (`gpt-oss-20b-GGUF`
+and `Qwen2.5-7B-Instruct-GGUF` respectively) — the schema/trace files are
+what's bundled, not the model weights. The runtime comparison is reported here
+with the exact commands used but has no bundled fixture.
 
 ## Quantization ladder
 
@@ -50,14 +53,67 @@ Q2_K) is one flipped sample out of ten on a two-probe capability; the
 statistical gate marks it `noisy ↓` rather than failing the build over it.
 
 No published per-quant perplexity numbers exist for this GGUF, so this isn't a
-precise comparison against the known perplexity curve. Result at face value:
-on this 3-tool schema, capability scores don't move meaningfully down to
-2-bit quantization for this model. That's consistent with either (a)
-tool-calling on a small, well-represented schema being more quantization-robust
-than open-ended generation, or (b) a ceiling effect from a schema this simple.
-The runtime comparison below, on a different model, shows the same probe
-battery does detect a real split when one exists — so this isn't a case of the
-probes being insensitive to everything.
+precise comparison against the known perplexity curve. On this 3-tool schema,
+capability scores don't move meaningfully down to 2-bit quantization. That result
+is ambiguous on its own: it could mean tool-calling is inherently robust to
+quantization, or it could mean a 3-tool schema with near-ceiling scores on most
+capabilities has no room left to show a drop. The follow-up below distinguishes
+the two.
+
+### Follow-up: harder schema, higher sample count
+
+Same ladder, same cached weights, no new downloads. Two changes: the tool
+schema goes from 3 tools to 10
+([`fixtures/hard_agent_tools.json`](fixtures/hard_agent_tools.json)), with
+three semantically overlapping clusters (event operations, messaging, record
+operations) and richer argument constraints (enums, `format`, `multipleOf`,
+nested arrays of formatted strings); and `--samples` goes from 10 to 15. This
+raises trials per capability from 30 (3 probes × 10 samples) to 150 (10 probes
+× 15 samples).
+
+```bash
+uv run probelock probe --tools fixtures/hard_agent_tools.json \
+    --endpoint http://localhost:8080/v1 --model qwen25-7b \
+    --quant Q4_K_M --runtime llama.cpp --samples 15 --temperature 0.7 -o q4_k_m.lock
+```
+
+| Capability | F16 | Q8_0 | Q6_K | Q5_K_M | Q4_K_M | Q3_K_M | Q2_K |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| arg_validity | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| arity_robustness | 0.913 | 0.940 | 0.907 | 0.907 | 0.973 | 0.920 | 0.967 |
+| format_adherence | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0.700 |
+| needle_in_tools | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| no_hallucinated_tool | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| required_args | 1.00 | 0.987 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| structured_output | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| tool_discrimination | 0.993 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| tool_permission | 0.927 | 0.913 | 0.933 | 0.940 | 0.853 | 0.993 | 1.00 |
+| tool_restraint | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| tool_selection | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+
+Two capabilities baseline below 1.00 on this schema (`arity_robustness` at
+0.913, `tool_permission` at 0.927 on F16), which gives the ladder room to move
+in either direction — unlike the 3-tool schema, where most capabilities were
+already pinned at ceiling. `gate --confidence 0.95` against the F16 baseline
+flags two statistically significant regressions:
+
+- **Q4_K_M**: `tool_permission` 0.927 → 0.853 (Δ −0.073, significant). Not the
+  most aggressive quant in the ladder — Q3_K_M and Q2_K score higher on the
+  same capability. Non-monotonic relative to bit-width.
+- **Q2_K**: `format_adherence` 1.00 → 0.700 (Δ −0.300, significant). At the
+  most aggressive quant, consistent with a genuine floor effect. The 3-tool
+  run showed the same capability dip at the same quant (1.00 → 0.90) but
+  didn't have enough samples to clear the significance bar.
+
+This resolves the ambiguity from the 3-tool run: the probe battery does detect
+routine, non-catastrophic capability drift, including at a non-terminal point
+in the ladder — the 3-tool result was a sensitivity limit of that particular
+schema and sample count, not a property of the scoring method. The
+non-monotonic `tool_permission` result is itself a relevant data point for how
+probelock is meant to be used: a candidate one step down the ladder from a
+passing one is not guaranteed to also pass, which is the argument for gating
+every quant/runtime swap against baseline rather than assuming a smooth
+degradation curve.
 
 ## GGUF vs MLX, same nominal quant
 

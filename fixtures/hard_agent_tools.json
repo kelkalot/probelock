@@ -1,0 +1,173 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "create_event",
+      "description": "Create a new calendar event",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "start": {"type": "string", "format": "date-time"},
+          "end": {"type": "string", "format": "date-time"},
+          "attendees": {"type": "array", "items": {"type": "string", "format": "email"}},
+          "visibility": {"type": "string", "enum": ["public", "private", "confidential"]},
+          "reminder_minutes_before": {"type": "integer", "minimum": 0, "maximum": 1440},
+          "location": {"type": "string"}
+        },
+        "required": ["title", "start", "end"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_event",
+      "description": "Modify fields on an existing calendar event",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "event_id": {"type": "string", "format": "uuid"},
+          "title": {"type": "string"},
+          "start": {"type": "string", "format": "date-time"},
+          "end": {"type": "string", "format": "date-time"},
+          "visibility": {"type": "string", "enum": ["public", "private", "confidential"]}
+        },
+        "required": ["event_id"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "cancel_event",
+      "description": "Cancel an existing calendar event",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "event_id": {"type": "string", "format": "uuid"},
+          "notify_attendees": {"type": "boolean"},
+          "reason": {"type": "string"}
+        },
+        "required": ["event_id", "notify_attendees"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_availability",
+      "description": "Find a free time slot across multiple participants' calendars",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "participants": {"type": "array", "items": {"type": "string", "format": "email"}, "minItems": 1},
+          "duration_minutes": {"type": "integer", "minimum": 15, "multipleOf": 15},
+          "earliest": {"type": "string", "format": "date-time"},
+          "latest": {"type": "string", "format": "date-time"}
+        },
+        "required": ["participants", "duration_minutes"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_message",
+      "description": "Send a message to a recipient",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "recipient": {"type": "string", "format": "email"},
+          "subject": {"type": "string"},
+          "body": {"type": "string"},
+          "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+          "attachments": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["recipient", "subject", "body"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_reminder",
+      "description": "Send a one-off reminder to a recipient at a specific time",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "recipient": {"type": "string", "format": "email"},
+          "remind_at": {"type": "string", "format": "date-time"},
+          "message": {"type": "string"}
+        },
+        "required": ["recipient", "remind_at", "message"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "schedule_message",
+      "description": "Queue a message to be sent later at a specific time",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "recipient": {"type": "string", "format": "email"},
+          "body": {"type": "string"},
+          "send_at": {"type": "string", "format": "date-time"},
+          "timezone": {"type": "string"}
+        },
+        "required": ["recipient", "body", "send_at"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_records",
+      "description": "Search stored records by keyword",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "record_type": {"type": "string", "enum": ["contact", "document", "note", "task"]},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+          "created_after": {"type": "string", "format": "date"}
+        },
+        "required": ["query", "record_type"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "export_records",
+      "description": "Export all records of a given type to a destination",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "record_type": {"type": "string", "enum": ["contact", "document", "note", "task"]},
+          "format": {"type": "string", "enum": ["csv", "json", "pdf"]},
+          "destination": {"type": "string", "format": "uri"}
+        },
+        "required": ["record_type", "format", "destination"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "archive_records",
+      "description": "Archive one or more records by id",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "record_ids": {"type": "array", "items": {"type": "string", "format": "uuid"}, "minItems": 1},
+          "reason": {"type": "string"},
+          "permanent": {"type": "boolean"}
+        },
+        "required": ["record_ids", "permanent"]
+      }
+    }
+  }
+]

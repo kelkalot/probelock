@@ -1,0 +1,502 @@
+{
+  "probelock_version": "0.1.0",
+  "label": "qwen25-7b @ Q3_K_M (llama.cpp)",
+  "model": "qwen25-7b",
+  "quant": "Q3_K_M",
+  "runtime": "llama.cpp",
+  "tools_fingerprint": "1142385d09df9319",
+  "traces_fingerprint": null,
+  "n_probes": 95,
+  "samples": 15,
+  "generated_at": "2026-07-02T05:16:38.723587+00:00",
+  "capabilities": {
+    "arg_validity": 1.0,
+    "arity_robustness": 0.92,
+    "format_adherence": 1.0,
+    "needle_in_tools": 1.0,
+    "no_hallucinated_tool": 1.0,
+    "required_args": 1.0,
+    "structured_output": 1.0,
+    "tool_discrimination": 1.0,
+    "tool_permission": 0.9933,
+    "tool_restraint": 1.0,
+    "tool_selection": 1.0
+  },
+  "results": [
+    {
+      "probe_id": "tool_selection::archive_records",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::archive_records",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::archive_records",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::archive_records",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::archive_records",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::archive_records",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::archive_records",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::archive_records",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::archive_records",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::cancel_event",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::cancel_event",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::cancel_event",
+      "capability": "arity_robustness",
+      "score": 0.9333333333333333
+    },
+    {
+      "probe_id": "needle_in_tools::cancel_event",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::cancel_event",
+      "capability": "tool_permission",
+      "score": 0.9333333333333333
+    },
+    {
+      "probe_id": "no_hallucinated_tool::cancel_event",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::cancel_event",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::cancel_event",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::cancel_event",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::create_event",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::create_event",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::create_event",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::create_event",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::create_event",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::create_event",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::create_event",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::create_event",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::create_event",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::export_records",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::export_records",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::export_records",
+      "capability": "arity_robustness",
+      "score": 0.6666666666666666
+    },
+    {
+      "probe_id": "needle_in_tools::export_records",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::export_records",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::export_records",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::export_records",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::export_records",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::export_records",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::find_availability",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::find_availability",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::find_availability",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::find_availability",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::find_availability",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::find_availability",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::find_availability",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::find_availability",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::find_availability",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::schedule_message",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::schedule_message",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::schedule_message",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::schedule_message",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::schedule_message",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::schedule_message",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::schedule_message",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::schedule_message",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::schedule_message",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::search_records",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::search_records",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::search_records",
+      "capability": "arity_robustness",
+      "score": 0.9333333333333333
+    },
+    {
+      "probe_id": "needle_in_tools::search_records",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::search_records",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::search_records",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::search_records",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::search_records",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::search_records",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::send_message",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::send_message",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::send_message",
+      "capability": "arity_robustness",
+      "score": 0.8666666666666667
+    },
+    {
+      "probe_id": "needle_in_tools::send_message",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::send_message",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::send_message",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::send_message",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::send_message",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::send_message",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::send_reminder",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::send_reminder",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::send_reminder",
+      "capability": "arity_robustness",
+      "score": 0.8
+    },
+    {
+      "probe_id": "needle_in_tools::send_reminder",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::send_reminder",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::send_reminder",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::send_reminder",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::send_reminder",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::send_reminder",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::update_event",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::update_event",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::update_event",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::update_event",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::update_event",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::update_event",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::update_event",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::update_event",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::update_event",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_restraint::trivia",
+      "capability": "tool_restraint",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_restraint::definition",
+      "capability": "tool_restraint",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_restraint::greeting",
+      "capability": "tool_restraint",
+      "score": 1.0
+    },
+    {
+      "probe_id": "format_adherence::one_word_yesno",
+      "capability": "format_adherence",
+      "score": 1.0
+    },
+    {
+      "probe_id": "format_adherence::exact_token",
+      "capability": "format_adherence",
+      "score": 1.0
+    }
+  ]
+}
