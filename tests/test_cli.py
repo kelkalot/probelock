@@ -394,3 +394,171 @@ def test_gate_confidence_marks_noisy_drop_and_still_passes(tmp_path):
     result = runner.invoke(app, ["gate", "-b", str(b), "-c", str(c), "--confidence", "0.95"])
     assert result.exit_code == 0, result.output
     assert "noisy" in result.output
+
+
+# --- trace ingestion: ingest -> review -> replay ---------------------------------
+
+_AGENT_LOG = _ROOT / "fixtures" / "sample_agent_log.jsonl"
+
+
+def _ingest(tmp_path, *extra):
+    out = tmp_path / "mined.json"
+    result = runner.invoke(app, ["ingest", str(_AGENT_LOG), "--out", str(out), *extra])
+    assert result.exit_code == 0, result.output
+    return out
+
+
+def test_ingest_mines_the_fixture_log_all_pending(tmp_path):
+    out = _ingest(tmp_path)
+    data = json.loads(out.read_text())
+    assert {p["status"] for p in data["probes"]} == {"pending"}
+    cats = [p["category"] for p in data["probes"]]
+    assert cats.count("schema_validity") == 5
+    assert cats.count("tool_selection") == 2  # one continuation- one agreement-confirmed
+    assert cats.count("no_tool") == 1
+    assert all(p["id"].startswith("trace:") for p in data["probes"])
+
+
+def test_ingest_reports_skips_and_next_step(tmp_path):
+    out = tmp_path / "mined.json"
+    result = runner.invoke(app, ["ingest", str(_AGENT_LOG), "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert "failed_status" in result.output
+    assert "forced_tool_choice" in result.output
+    assert "traces review" in result.output
+
+
+def test_ingest_bad_inputs_exit_2(tmp_path):
+    out = tmp_path / "mined.json"
+    for args in (
+        ["ingest", str(tmp_path / "nope.jsonl"), "--out", str(out)],
+        ["ingest", str(_AGENT_LOG), "--out", str(out), "--format", "csv"],
+        ["ingest", str(_AGENT_LOG), "--out", str(out), "--redact-patterns", "ssn"],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 2, result.output
+
+
+def test_review_auto_accept_covers_only_schema_validity(tmp_path):
+    out = _ingest(tmp_path)
+    result = runner.invoke(app, ["traces", "review", str(out), "--auto-accept", "schema-validity"])
+    assert result.exit_code == 0, result.output
+    by_status = {}
+    for p in json.loads(out.read_text())["probes"]:
+        by_status.setdefault(p["status"], []).append(p["category"])
+    assert sorted(by_status["accepted"]) == ["schema_validity"] * 5
+    assert len(by_status["pending"]) == 3
+
+    result = runner.invoke(app, ["traces", "review", str(out), "--auto-accept", "tool_selection"])
+    assert result.exit_code == 2, result.output  # inferred category: review or the footgun pair
+
+
+def test_review_auto_accept_all_needs_acknowledgement_and_skips_no_tool(tmp_path):
+    out = _ingest(tmp_path)
+    result = runner.invoke(app, ["traces", "review", str(out), "--auto-accept-all"])
+    assert result.exit_code == 2, result.output
+
+    result = runner.invoke(
+        app, ["traces", "review", str(out), "--auto-accept-all", "--i-know-what-im-doing"])
+    assert result.exit_code == 0, result.output
+    assert "no auto-accept path" in result.output
+    statuses = {p["category"]: p["status"] for p in json.loads(out.read_text())["probes"]}
+    assert statuses["schema_validity"] == "accepted"
+    assert statuses["tool_selection"] == "accepted"
+    assert statuses["no_tool"] == "pending"  # never batch-accepted
+
+
+def test_review_interactive_accept_reject_quit(tmp_path):
+    out = _ingest(tmp_path)
+    result = runner.invoke(app, ["traces", "review", str(out)], input="y\nn\nq\n")
+    assert result.exit_code == 0, result.output
+    statuses = [p["status"] for p in json.loads(out.read_text())["probes"]]
+    assert statuses.count("accepted") == 1
+    assert statuses.count("rejected") == 1
+    assert statuses.count("pending") == 6  # progress saved, rest untouched
+
+
+def test_review_interactive_refuses_accept_all_for_no_tool(tmp_path):
+    out = _ingest(tmp_path)
+    # probes are sorted no_tool first: 'a' on it must refuse and re-prompt
+    result = runner.invoke(app, ["traces", "review", str(out)], input="a\nq\n")
+    assert result.exit_code == 0, result.output
+    assert "no accept-all path" in result.output
+    assert all(p["status"] == "pending" for p in json.loads(out.read_text())["probes"])
+
+
+def test_review_interactive_edit_expected_tool(tmp_path):
+    out = _ingest(tmp_path)
+    # skip the no_tool + 5 schema_validity probes; edit the first tool_selection probe
+    result = runner.invoke(app, ["traces", "review", str(out)],
+                           input="s\n" * 6 + "e\nget_weather\nq\n")
+    assert result.exit_code == 0, result.output
+    edited = [p for p in json.loads(out.read_text())["probes"]
+              if p["category"] == "tool_selection" and p["status"] == "accepted"]
+    assert len(edited) == 1
+    assert edited[0]["check"] == {"type": "calls_tool", "tool": "get_weather"}
+    assert edited[0]["provenance"]["edited_from"] == "convert_currency"
+
+
+def test_probe_mined_excludes_sensitive_from_lockfile_unless_allowed(tmp_path):
+    out = _ingest(tmp_path)
+    runner.invoke(app, ["traces", "review", str(out), "--auto-accept", "schema_validity"])
+    lock = tmp_path / "cand.lock"
+
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8),
+        "--mined", str(out), "-o", str(lock)])
+    assert result.exit_code == 0, result.output
+    assert "sensitive" in result.output
+    caps = json.loads(lock.read_text())["capabilities"]
+    assert not any(c.startswith("traced_") for c in caps)
+
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8),
+        "--mined", str(out), "--allow-sensitive", "-o", str(lock)])
+    assert result.exit_code == 0, result.output
+    data = json.loads(lock.read_text())
+    assert "traced_schema_validity" in data["capabilities"]  # reported separately
+    assert "tool_selection" in data["capabilities"]  # synthetic battery still intact
+    assert data["traces_fingerprint"]
+
+
+def test_probe_mined_with_nothing_accepted_warns_about_review(tmp_path):
+    out = _ingest(tmp_path)  # everything still pending
+    lock = tmp_path / "cand.lock"
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8),
+        "--mined", str(out), "-o", str(lock)])
+    assert result.exit_code == 0, result.output
+    assert "pending review" in result.output
+    assert not any(c.startswith("traced_")
+                   for c in json.loads(lock.read_text())["capabilities"])
+
+
+def test_derive_shows_accepted_mined_probes(tmp_path):
+    out = _ingest(tmp_path)
+    runner.invoke(app, ["traces", "review", str(out), "--auto-accept", "schema_validity"])
+    result = runner.invoke(app, ["derive", "--tools", str(TOOLS_PATH), "--mined", str(out)])
+    assert result.exit_code == 0, result.output
+    assert "traced_schema_validity" in result.output
+
+
+def test_probe_combines_traces_and_mined_fingerprints(tmp_path):
+    out = _ingest(tmp_path)
+    runner.invoke(app, ["traces", "review", str(out), "--auto-accept", "schema_validity"])
+
+    def fingerprint(*extra):
+        lock = tmp_path / "fp.lock"
+        result = runner.invoke(app, [
+            "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8),
+            "--allow-sensitive", "-o", str(lock), *extra])
+        assert result.exit_code == 0, result.output
+        return json.loads(lock.read_text())["traces_fingerprint"]
+
+    traces_only = fingerprint("--traces", str(_SAMPLE_TRACES))
+    mined_only = fingerprint("--mined", str(out))
+    both = fingerprint("--traces", str(_SAMPLE_TRACES), "--mined", str(out))
+    assert traces_only and mined_only and both
+    # each source contributes: the combined print differs from either alone, so a
+    # diff's traces_changed note fires when EITHER trace input changes
+    assert len({traces_only, mined_only, both}) == 3

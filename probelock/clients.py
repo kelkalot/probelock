@@ -362,6 +362,25 @@ class SimulatedClient:
                 return ResponseMessage(content=text)
             return ResponseMessage(content=f"{text} — happy to help!")
 
+        # Trace-mined capabilities (probelock ingest): same crafting logic as their
+        # synthetic counterparts, against the recorded tool carried in the reference.
+        if cap == "traced_tool_selection":
+            if passing:
+                return self._call(probe.expected_tool, valid_args)
+            return ResponseMessage(content="Sure, I can help you with that.")
+
+        if cap == "traced_schema_validity":
+            tool = probe.reference.get("tool") or (self._tool_names(probe) or ["__tool__"])[0]
+            if passing:
+                return self._call(tool, valid_args)
+            return self._call(tool, self._type_break(probe.schema, valid_args))
+
+        if cap == "traced_no_tool":
+            if passing:  # the recorded model rightly answered in text; so do we
+                return ResponseMessage(content="Here's the answer, no tool needed.")
+            names = self._tool_names(probe)  # fail by over-triggering
+            return self._call(names[0] if names else "__spurious__", {})
+
         return ResponseMessage(content="")  # pragma: no cover
 
     @staticmethod

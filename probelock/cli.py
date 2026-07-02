@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import html as _html
 import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -16,7 +17,20 @@ from rich.table import Table
 from . import __version__
 from .clients import AnyLlmClient, ClientError, HttpClient, LiteLlmClient, SimulatedClient
 from .diff import diff_lockfiles, error_derived_negative_capabilities
+from .ingest import FORMATS, REDACT_PATTERNS, MiningConfig, ingest_file
 from .lockfile import read_lockfile, write_lockfile
+from .mined import (
+    AUTO_ACCEPT_SAFE,
+    CATEGORIES,
+    NEVER_AUTO_ACCEPT,
+    accepted_probes,
+    auto_accept as batch_accept,
+    edit_expected_tool,
+    load_mined,
+    mined_fingerprint,
+    save_mined,
+    to_probe,
+)
 from .probes import derive_probes, tools_fingerprint
 from .runner import run_probes
 from .traces import derive_traced_probes, load_trace_records, traces_fingerprint
@@ -26,6 +40,8 @@ app = typer.Typer(
     help="probelock — a capability lockfile for local models. Catch silent "
     "regressions when you swap a model, quant, or runtime.",
 )
+traces_app = typer.Typer(add_completion=False, help="Work with trace-mined probes.")
+app.add_typer(traces_app, name="traces")
 console = Console()
 err_console = Console(stderr=True)
 
@@ -41,6 +57,11 @@ _BAR = 24
 _TRACES_OPTION = typer.Option(
     None, "--traces", help="Optional trace-export JSON to add real, replayed decision "
     "points to the battery (see README: Deriving probes from real traces)."
+)
+
+_MINED_OPTION = typer.Option(
+    None, "--mined", help="Optional mined probes file from `probelock ingest` — only "
+    "accepted (reviewed) probes join the battery."
 )
 
 
@@ -108,15 +129,49 @@ def _load_traces_or_exit(path: Path):
         raise typer.Exit(2)
 
 
+def _load_mined_or_exit(path: Path):
+    try:
+        return load_mined(path)
+    except FileNotFoundError:
+        _err(f"Mined probes file not found: {path}")
+        raise typer.Exit(2)
+    except OSError as exc:
+        _err(f"Could not read mined probes file {path}: {exc}")
+        raise typer.Exit(2)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        _err(f"Invalid mined probes file {path}: {exc}")
+        raise typer.Exit(2)
+
+
+def _mined_battery(path: Path):
+    """Load a mined probes file and split it into the replayable battery slice.
+    Returns (accepted MinedProbes, converted Probes); reports pending/rejected counts
+    so a user who forgot to review isn't left wondering where their probes went."""
+    all_mined = _load_mined_or_exit(path)
+    accepted = accepted_probes(all_mined)
+    pending = sum(1 for p in all_mined if p.status == "pending")
+    if pending:
+        err_console.print(
+            f"[yellow]{pending} mined probe(s) still pending review — run "
+            f"`probelock traces review {path}` to activate them.[/]"
+        )
+    if not accepted:
+        err_console.print(f"[yellow]0 accepted probe(s) in {path}; none added.[/]")
+    return accepted, [to_probe(p) for p in accepted]
+
+
 @app.command()
 def derive(
     tools: Path = typer.Option(..., "--tools", "-t", help="OpenAI-style tools JSON file."),
     traces: Optional[Path] = _TRACES_OPTION,
+    mined: Optional[Path] = _MINED_OPTION,
 ) -> None:
     """Show the probe battery that would be generated from a toolset (transparency)."""
     probes = derive_probes(_load_tools_or_exit(tools))
     if traces is not None:
         probes = probes + derive_traced_probes(_load_traces_or_exit(traces))
+    if mined is not None:
+        probes = probes + _mined_battery(mined)[1]
     table = Table(title=f"{len(probes)} probes derived", expand=True)
     table.add_column("Probe id", no_wrap=True)
     table.add_column("Capability", no_wrap=True)
@@ -153,6 +208,11 @@ def probe(
     label: Optional[str] = typer.Option(None, "--label", help="Override the lockfile label."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Write the lockfile here."),
     traces: Optional[Path] = _TRACES_OPTION,
+    mined: Optional[Path] = _MINED_OPTION,
+    allow_sensitive: bool = typer.Option(
+        False, "--allow-sensitive", help="Let sensitive mined probes (verbatim real "
+        "conversation content) into a written lockfile run."
+    ),
 ) -> None:
     """Run the probe battery and produce a capability lockfile."""
     tool_list = _load_tools_or_exit(tools)
@@ -170,6 +230,39 @@ def probe(
             f"{traces} — this may contain real user data; review before committing the "
             f"traces file or the resulting lockfile.[/]"
         )
+
+    mined_fp = None
+    if mined is not None:
+        accepted, mined_battery = _mined_battery(mined)
+        sensitive = [p for p in accepted if p.sensitive]
+        if sensitive and out is not None and not allow_sensitive:
+            # A lockfile is meant to be committed; probes frozen from verbatim real
+            # conversations are not — refuse to bind the one to the other unless the
+            # user explicitly opts in (see README: mining probes from raw agent logs).
+            err_console.print(
+                f"[yellow]{len(sensitive)} sensitive mined probe(s) excluded from this "
+                f"lockfile run — their frozen contexts hold verbatim real conversation "
+                f"content. Pass --allow-sensitive to include them anyway, or re-ingest "
+                f"with --redact-patterns for committable probes.[/]"
+            )
+            accepted = [p for p in accepted if not p.sensitive]
+            mined_battery = [to_probe(p) for p in accepted]
+        if accepted:
+            probes = probes + mined_battery
+            mined_fp = mined_fingerprint(accepted)
+            if any(p.sensitive for p in accepted):
+                err_console.print(
+                    f"[yellow]{len(mined_battery)} mined probe(s) added from real trace "
+                    f"content in {mined} — this may contain real user data.[/]"
+                )
+
+    # One trace-input fingerprint in the lockfile, covering whichever real-trace sources
+    # fed this battery — diff's traces_changed note stays a single, reliable signal.
+    fps = [fp for fp in (traces_fp, mined_fp) if fp]
+    if len(fps) == 2:
+        traces_fp = hashlib.sha256("+".join(fps).encode()).hexdigest()[:16]
+    elif fps:
+        traces_fp = fps[0]
 
     try:
         if simulate is not None:
@@ -252,6 +345,279 @@ def probe(
     if out is not None:
         write_lockfile(lock, out)
         console.print(f"[green]wrote[/] {out}")
+
+
+@app.command()
+def ingest(
+    log: Path = typer.Argument(
+        ..., help="JSONL log of raw agent traffic (recording-proxy output, or your own "
+        "request/response logging)."
+    ),
+    out: Path = typer.Option(..., "--out", "-o", help="Write the mined probes file here."),
+    fmt: str = typer.Option("auto", "--format", help="auto | trace-v1 | openai-jsonl"),
+    min_agreement: int = typer.Option(
+        2, "--min-agreement", help="Distinct sessions that must agree to confirm a "
+        "tool-selection probe when no continuation evidence exists."
+    ),
+    min_agreement_notool: int = typer.Option(
+        3, "--min-agreement-notool", help="Distinct sessions required for a no-tool "
+        "probe (stricter: a mislabeled one freezes a model mistake as expected)."
+    ),
+    per_capability: int = typer.Option(
+        8, "--per-capability", help="Max probes kept per (tool, category) pair."
+    ),
+    max_context_tokens: int = typer.Option(
+        8192, "--max-context-tokens", help="Skip exchanges whose frozen context exceeds "
+        "this (estimated) — bounds replay cost."
+    ),
+    redact_patterns: str = typer.Option(
+        "", "--redact-patterns", help="Comma-separated scrubbers applied to message "
+        "text: emails,phones,paths. Using this marks probes non-sensitive (committable)."
+    ),
+) -> None:
+    """Mine probes from a raw agent traffic log.
+
+    Everything lands with status "pending" — run `probelock traces review` to activate
+    probes, then replay them with `probelock probe --mined`.
+    """
+    if fmt not in FORMATS:
+        _err(f"Unknown --format '{fmt}' (use {' | '.join(FORMATS)}).")
+        raise typer.Exit(2)
+    patterns = tuple(p.strip().lower() for p in redact_patterns.split(",") if p.strip())
+    for name in patterns:
+        if name not in REDACT_PATTERNS:
+            _err(
+                f"Unknown redact pattern '{name}' (use {', '.join(sorted(REDACT_PATTERNS))})."
+            )
+            raise typer.Exit(2)
+
+    config = MiningConfig(
+        min_agreement=min_agreement,
+        min_agreement_notool=min_agreement_notool,
+        per_capability=per_capability,
+        max_context_tokens=max_context_tokens,
+        redact_patterns=patterns,
+        source=log.name,
+    )
+    try:
+        probes, summary = ingest_file(log, fmt, config)
+    except FileNotFoundError:
+        _err(f"Log file not found: {log}")
+        raise typer.Exit(2)
+    except OSError as exc:
+        _err(f"Could not read log file {log}: {exc}")
+        raise typer.Exit(2)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        _err(f"Invalid log file {log}: {exc}")
+        raise typer.Exit(2)
+
+    save_mined(probes, out, header={"generated_by": f"probelock {__version__}", "source": str(log)})
+
+    console.print(
+        f"\n[bold]{len(probes)} probe(s) mined[/] from {summary.records} record(s) — "
+        f"{summary.sessions} session(s), {summary.clusters} distinct context(s)"
+    )
+    if summary.emitted:
+        table = Table(expand=True)
+        table.add_column("Category", no_wrap=True)
+        table.add_column("Mined", justify="right")
+        table.add_column("Candidates", justify="right")
+        for cat in CATEGORIES:
+            if summary.candidates.get(cat) or summary.emitted.get(cat):
+                table.add_row(
+                    cat, str(summary.emitted.get(cat, 0)), str(summary.candidates.get(cat, 0))
+                )
+        console.print(table)
+    # No silent drops: everything the pipeline discarded, and why.
+    for reason, n in sorted(summary.skipped.items()):
+        console.print(f"[yellow]skipped {n} record(s): {reason}[/]")
+    if summary.ambiguous_tool_selection:
+        console.print(
+            f"[yellow]{summary.ambiguous_tool_selection} context(s) had conflicting "
+            f"cross-session tool agreement — not mined for tool selection.[/]"
+        )
+    if summary.unconfirmed_tool_clusters:
+        console.print(
+            f"[dim]{summary.unconfirmed_tool_clusters} tool-calling context(s) could not "
+            f"be confirmed good — eligible for schema_validity only.[/]"
+        )
+    console.print(f"[green]wrote[/] {out}")
+    if probes:
+        sensitive_n = sum(1 for p in probes if p.sensitive)
+        if sensitive_n:
+            console.print(
+                f"[yellow]{sensitive_n} probe(s) carry verbatim conversation content "
+                f"(sensitive: true) — don't commit {out}; re-ingest with "
+                f"--redact-patterns if you want committable probes.[/]"
+            )
+        console.print(f"\nNext: probelock traces review {out}")
+
+
+def _final_user_turn(messages) -> str:
+    for m in reversed(messages):
+        if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str):
+            return m["content"]
+    return "(no user turn)"
+
+
+def _render_mined_probe(position: str, mp) -> None:
+    console.rule(f"[bold]{escape(mp.id)}[/]  {position}")
+    turn = _final_user_turn(mp.messages)
+    if len(turn) > 400:
+        turn = turn[:400] + "…"
+    ref = mp.reference or {}
+    if mp.category == "no_tool":
+        recorded = "answered in text (no tool call)"
+    elif ref.get("tool"):
+        recorded = f"called {ref['tool']} {json.dumps(ref.get('valid_args', {}))}"
+    else:
+        recorded = "(not recorded)"
+    prov = mp.provenance
+    console.print(f"[bold]category[/]   {escape(mp.category)}")
+    console.print(f"[bold]check[/]      {escape(json.dumps(mp.check()))}")
+    console.print(f"[bold]user turn[/]  {escape(turn)}")
+    console.print(f"[bold]recorded[/]   {escape(recorded)}")
+    console.print(
+        f"[bold]provenance[/] {prov.get('sessions', '?')} session(s) via "
+        f"{escape(str(prov.get('rule', '?')))} — model {escape(str(prov.get('model') or '?'))}, "
+        f"{len(mp.messages)} message(s)"
+        + (", [yellow]sensitive[/]" if mp.sensitive else "")
+    )
+
+
+@traces_app.command()
+def review(
+    mined_file: Path = typer.Argument(..., help="Mined probes file from `probelock ingest`."),
+    auto_accept: List[str] = typer.Option(
+        [], "--auto-accept", help="Batch-accept a category without prompting. Only "
+        "schema_validity qualifies (its mining needed no correctness inference)."
+    ),
+    auto_accept_all: bool = typer.Option(
+        False, "--auto-accept-all", help="Batch-accept every pending category except "
+        "no_tool. Requires --i-know-what-im-doing."
+    ),
+    i_know_what_im_doing: bool = typer.Option(
+        False, "--i-know-what-im-doing", help="Acknowledge that batch-accepting "
+        "inferred probes can freeze model mistakes into the baseline."
+    ),
+) -> None:
+    """Review pending mined probes: y accept, n reject, e edit expected tool,
+    a accept all in category, s skip, q quit (progress is saved)."""
+    probes = _load_mined_or_exit(mined_file)
+    # Keep whatever header (source, generated_by, ...) ingest wrote alongside the probes.
+    raw = _load_json_or_exit(mined_file, "mined probes file")
+    header = {k: v for k, v in raw.items() if k not in ("probes", "version")}
+
+    cats = frozenset(c.strip().lower().replace("-", "_") for c in auto_accept if c.strip())
+    unknown = cats - set(CATEGORIES)
+    if unknown:
+        _err(f"Unknown --auto-accept category: {', '.join(sorted(unknown))} "
+             f"(use {', '.join(CATEGORIES)}).")
+        raise typer.Exit(2)
+    unsafe = cats - AUTO_ACCEPT_SAFE
+    if unsafe:
+        _err(
+            f"--auto-accept only covers {', '.join(sorted(AUTO_ACCEPT_SAFE))}; "
+            f"{', '.join(sorted(unsafe))} was inferred from traces and needs review "
+            f"(or the explicit --auto-accept-all --i-know-what-im-doing)."
+        )
+        raise typer.Exit(2)
+    if auto_accept_all and not i_know_what_im_doing:
+        _err("--auto-accept-all requires --i-know-what-im-doing.")
+        raise typer.Exit(2)
+
+    if cats or auto_accept_all:
+        counts = batch_accept(probes, cats, accept_all=auto_accept_all)
+        save_mined(probes, mined_file, header=header)
+        skipped_no_tool = counts.pop("no_tool_skipped", 0)
+        total = sum(counts.values())
+        console.print(f"[green]auto-accepted {total} probe(s)[/] "
+                      f"({', '.join(f'{c}: {n}' for c, n in sorted(counts.items())) or 'none'})")
+        if skipped_no_tool:
+            console.print(
+                f"[yellow]{skipped_no_tool} no_tool probe(s) left pending — no_tool has "
+                f"no auto-accept path (a mislabeled probe freezes a model mistake as "
+                f"expected behavior); accept them individually.[/]"
+            )
+        _review_summary(probes, mined_file)
+        return
+
+    pending = [p for p in probes if p.status == "pending"]
+    if not pending:
+        console.print("[green]nothing pending[/]")
+        _review_summary(probes, mined_file)
+        return
+
+    console.print(
+        f"{len(pending)} pending probe(s). "
+        f"[bold]y[/] accept · [bold]n[/] reject · [bold]e[/] edit expected tool · "
+        f"[bold]a[/] accept all in category · [bold]s[/] skip · [bold]q[/] quit"
+    )
+    stopped = False
+    for i, mp in enumerate(pending, 1):
+        if stopped or mp.status != "pending":  # 'a' may have accepted it already
+            continue
+        _render_mined_probe(f"({i}/{len(pending)})", mp)
+        while True:
+            try:
+                choice = typer.prompt("y/n/e/a/s/q", default="s").strip().lower()
+            except typer.Abort:  # EOF / Ctrl-C: keep the decisions made so far
+                stopped = True
+                break
+            if choice in ("y", "yes"):
+                mp.status, mp.provenance["review"] = "accepted", "accepted"
+                break
+            if choice in ("n", "no"):
+                mp.status, mp.provenance["review"] = "rejected", "rejected"
+                break
+            if choice == "s":
+                break
+            if choice == "q":
+                stopped = True
+                break
+            if choice == "e":
+                try:
+                    edit_expected_tool(mp, typer.prompt("expected tool").strip())
+                    break
+                except typer.Abort:
+                    stopped = True
+                    break
+                except ValueError as exc:
+                    console.print(f"[yellow]{escape(str(exc))}[/]")
+                    continue
+            if choice == "a":
+                if mp.category in NEVER_AUTO_ACCEPT:
+                    console.print(
+                        "[yellow]no_tool probes have no accept-all path — a mislabeled "
+                        "one freezes a model mistake as expected behavior. Accept them "
+                        "individually.[/]"
+                    )
+                    continue
+                n = 0
+                for p in pending:
+                    if p.status == "pending" and p.category == mp.category:
+                        p.status, p.provenance["review"] = "accepted", "accepted"
+                        n += 1
+                console.print(f"[green]accepted {n} {escape(mp.category)} probe(s)[/]")
+                break
+            console.print("[yellow]y / n / e / a / s / q[/]")
+
+    save_mined(probes, mined_file, header=header)
+    if stopped:
+        console.print("[yellow]review stopped — progress saved.[/]")
+    _review_summary(probes, mined_file)
+
+
+def _review_summary(probes, mined_file: Path) -> None:
+    by_status = {}
+    for p in probes:
+        by_status[p.status] = by_status.get(p.status, 0) + 1
+    console.print(
+        "  ".join(f"{status}: {by_status.get(status, 0)}"
+                  for status in ("accepted", "rejected", "pending"))
+    )
+    if by_status.get("accepted"):
+        console.print(f"\nNext: probelock probe --tools <tools.json> --mined {mined_file} ...")
 
 
 def _validate_confidence(confidence: Optional[float]) -> None:

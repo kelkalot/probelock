@@ -171,6 +171,31 @@ def score_format_adherence(probe: Probe, resp: ResponseMessage) -> float:
     return 1.0 if resp.content.strip() == probe.expected_text.strip() else 0.0
 
 
+def score_traced_schema_validity(probe: Probe, resp: ResponseMessage) -> float:
+    # Trace-mined schema validity: no expected tool was inferred (that would need
+    # correctness inference), so the candidate may call ANY offered tool — the check is
+    # that some call's arguments validate against the schema of the tool it names.
+    # Any-match across calls, consistent with arg_validity; a call naming an un-offered
+    # tool has no declared schema to hold it to and cannot earn the pass.
+    schemas = {}
+    for t in probe.tools or []:
+        fn = t.get("function") if isinstance(t, dict) else None
+        if isinstance(fn, dict):
+            params = fn.get("parameters")
+            schemas[fn.get("name")] = params if isinstance(params, dict) else {}
+    for call in resp.tool_calls:
+        schema = schemas.get(call.name)
+        args = _parse_args(call)
+        if schema is None or args is None:
+            continue
+        try:
+            jsonschema.validate(args, schema)
+            return 1.0
+        except (jsonschema.ValidationError, jsonschema.SchemaError):
+            continue
+    return 0.0
+
+
 SCORERS = {
     "tool_selection": score_tool_selection,
     "tool_discrimination": score_tool_discrimination,
@@ -183,12 +208,23 @@ SCORERS = {
     "tool_restraint": score_tool_restraint,
     "tool_permission": score_tool_permission,
     "no_hallucinated_tool": score_no_hallucinated_tool,
+    # Trace-mined capabilities (probelock ingest). Deliberately distinct names, not the
+    # synthetic ones, so lockfiles/diffs report trace-derived scores separately — a drop
+    # in multi-turn trace probes with stable synthetic probes is itself diagnostic.
+    # tool_selection and no_tool replay through the same deterministic checks as their
+    # synthetic counterparts; only schema_validity needs its own scorer (no pinned tool).
+    "traced_schema_validity": score_traced_schema_validity,
+    "traced_tool_selection": score_tool_selection,
+    "traced_no_tool": score_tool_restraint,
 }
 
 # Negative probes: the score measures the ABSENCE of bad behavior. An API error
 # means the bad behavior couldn't happen, so the runner scores these 1.0 on error
 # (but still error-tags them, so the all-errored fatal guard keeps working).
-NEGATIVE_CAPABILITIES = frozenset({"tool_restraint", "tool_permission", "no_hallucinated_tool"})
+# traced_no_tool is restraint mined from real traffic — same absence-of-behavior logic.
+NEGATIVE_CAPABILITIES = frozenset(
+    {"tool_restraint", "tool_permission", "no_hallucinated_tool", "traced_no_tool"}
+)
 
 
 def score(probe: Probe, resp: ResponseMessage) -> float:
