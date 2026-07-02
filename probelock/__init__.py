@@ -5,4 +5,4 @@ them with no LLM judge, and gate CI on within-model regression when you swap a
 model version, quantization, or runtime.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

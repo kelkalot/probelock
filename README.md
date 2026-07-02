@@ -245,6 +245,52 @@ the regressed commit and passes on an adjacent, unrelated commit. See
 [`VALIDATION.md`](VALIDATION.md) for the test setup and results, and
 [`fixtures/gptoss_regression_trace.json`](fixtures/gptoss_regression_trace.json) to reproduce it.
 
+## Mining probes from raw agent logs (experimental)
+
+`--traces` (above) replays a *curated* export you assembled by hand. `probelock ingest`
+goes one step earlier: point it at a raw request/response log of real agent traffic and it
+mines probes for you — multi-turn, realistic regression tests with near-zero authoring
+effort, still scored by the same deterministic checks (LLMs may appear in *trace
+generation* — that's your own agent — but never in *scoring*).
+
+```bash
+probelock ingest traces/agent.jsonl --out probes/mined.json   # everything lands "pending"
+probelock traces review probes/mined.json                     # activate probes (y/n/e/a/s/q)
+probelock probe --tools tools.json --mined probes/mined.json \
+    --endpoint http://localhost:11434/v1 --model llama3.1:8b -o candidate.lock
+```
+
+Two input shapes are auto-detected: the native `trace-v1` record (one JSON object per
+line with `request`/`response.message`, what a recording proxy writes) and `openai-jsonl`
+(the verbatim chat-completions request body next to the verbatim response object). See
+[`fixtures/sample_agent_log.jsonl`](fixtures/sample_agent_log.jsonl) and
+[`fixtures/sample_openai_log.jsonl`](fixtures/sample_openai_log.jsonl).
+
+Raw traffic includes model mistakes, so **provenance determines trust** — every probe
+records how many sessions support it and which rule confirmed it, and that decides how
+much review it needs:
+
+| Category | Check at replay | Mined from | Review |
+|---|---|---|---|
+| `traced_schema_validity` | some call's args validate against the called tool's schema | every tool-calling exchange (no inference) | `--auto-accept schema_validity` is safe |
+| `traced_tool_selection` | calls the confirmed tool | exchanges confirmed good: the result fed back and the conversation moved on (no error payload, no corrected-args retry, no re-ask), or the same context produced the same call in ≥ `--min-agreement` distinct sessions | review, or `--auto-accept-all --i-know-what-im-doing` |
+| `traced_no_tool` | answers in text, calls nothing | unanimous text answers across ≥ `--min-agreement-notool` (default 3) distinct sessions, no re-ask, preferring contexts lexically distant from the tools | **individual review only** — a mislabeled probe freezes a model mistake as expected behavior |
+
+The traced capabilities are deliberately separate names in the lockfile: a drop in
+multi-turn trace probes while single-turn synthetic probes hold steady is itself
+diagnostic ("context-length-sensitive regression").
+
+Privacy defaults are conservative. Argument values in frozen contexts are always
+replaced with structure-preserving placeholders (`"query": "<str:47ch>"`); message
+content stays verbatim (that's what makes replay realistic), so mined probes carry
+`"sensitive": true` and `probe -o` refuses to include them in a written lockfile
+without `--allow-sensitive`. If you want committable probes, opt in to scrubbing with
+`ingest --redact-patterns emails,phones,paths`. Identical contexts are deduplicated
+(timestamps stripped, whitespace collapsed), sampling keeps up to `--per-capability`
+probes per (tool, category) preferring longer contexts and later turns, and everything
+the pipeline skips (failed calls, forced `tool_choice`, oversized contexts, ambiguous
+agreement) is counted and reported — never silently dropped.
+
 ## Sampling & noisy gates
 
 With one sample per probe, a capability backed by 3 tools quantizes to
@@ -295,6 +341,11 @@ probelock diff probelock.lock candidate.lock --format markdown >> "$GITHUB_STEP_
 
 ## Roadmap
 
+- `probelock proxy`: a recording reverse proxy that writes `trace-v1` logs for `ingest`
+  from any OpenAI-compatible stack (llama.cpp, Ollama, vLLM, LM Studio) — one `base_url`
+  change in the agent, strict passthrough-on-error.
+- More `ingest` adapters (Anthropic logs, OTel GenAI spans) and an opt-in
+  `--cluster embeddings` mode beside the default dependency-free dedup.
 - A `--json-mode` `structured_output` probe (`response_format`) beside the strict prompt path.
 - Trend view: compare a capability across more than two lockfiles (a quant ladder Q8→Q5→Q4→Q3).
 - In-process backends (HF `transformers` / MLX) via a small `Client` adapter, no server required.

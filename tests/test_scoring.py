@@ -221,3 +221,46 @@ def test_required_args_any_matching_call_counts():
         ToolCall("t", json.dumps({"title": "x", "start": "y"})),  # complete
     ])
     assert scoring.score(p, resp) == 1.0
+
+
+def test_traced_schema_validity_validates_against_the_called_tools_own_schema():
+    tools = [
+        {"type": "function", "function": {"name": "a", "parameters": {
+            "type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]}}},
+        {"type": "function", "function": {"name": "b", "parameters": {
+            "type": "object", "properties": {"y": {"type": "string"}}, "required": ["y"]}}},
+    ]
+    p = Probe(id="traced_schema_validity::t", capability="traced_schema_validity",
+              description="", messages=[], tools=tools, expected_tool=None)
+    # ANY offered tool with schema-valid args passes — no tool is pinned
+    assert scoring.score(p, ResponseMessage(tool_calls=[ToolCall("a", '{"x": 1}')])) == 1.0
+    assert scoring.score(p, ResponseMessage(tool_calls=[ToolCall("b", '{"y": "ok"}')])) == 1.0
+    # invalid args against the called tool's OWN schema fail
+    assert scoring.score(p, ResponseMessage(tool_calls=[ToolCall("a", '{"x": "no"}')])) == 0.0
+    # a tool that isn't offered has no declared schema to hold the call to
+    assert scoring.score(p, ResponseMessage(tool_calls=[ToolCall("ghost", "{}")])) == 0.0
+    # no call at all is not schema-valid tool calling
+    assert scoring.score(p, ResponseMessage(content="just text")) == 0.0
+    # any-match across calls, consistent with arg_validity
+    assert scoring.score(p, ResponseMessage(
+        tool_calls=[ToolCall("a", '{"x": "no"}'), ToolCall("a", '{"x": 2}')])) == 1.0
+
+
+def test_traced_tool_selection_and_no_tool_reuse_the_deterministic_checks():
+    sel = Probe(id="traced_tool_selection::t", capability="traced_tool_selection",
+                description="", messages=[], tools=[], expected_tool="t")
+    assert scoring.score(sel, ResponseMessage(tool_calls=[ToolCall("t", "{}")])) == 1.0
+    assert scoring.score(sel, ResponseMessage(content="sure!")) == 0.0
+
+    nt = Probe(id="traced_no_tool::t", capability="traced_no_tool",
+               description="", messages=[], tools=[], expected_tool=None)
+    assert scoring.score(nt, ResponseMessage(content="answered in text")) == 1.0
+    assert scoring.score(nt, ResponseMessage(tool_calls=[ToolCall("t", "{}")])) == 0.0
+
+
+def test_traced_no_tool_is_a_negative_capability():
+    # Restraint mined from real traffic scores 1.0 on an API error, same as synthetic
+    # tool_restraint: a model that can't accept tools cannot over-trigger.
+    assert "traced_no_tool" in scoring.NEGATIVE_CAPABILITIES
+    assert "traced_tool_selection" not in scoring.NEGATIVE_CAPABILITIES
+    assert "traced_schema_validity" not in scoring.NEGATIVE_CAPABILITIES

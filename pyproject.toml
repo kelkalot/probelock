@@ -1,6 +1,6 @@
 [project]
 name = "probelock"
-version = "0.1.0"
+version = "0.2.0"
 description = "A capability lockfile for local models. Catch silent regressions when you swap a model, quant, or runtime."
 readme = "README.md"
 requires-python = ">=3.10"
