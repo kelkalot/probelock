@@ -90,6 +90,14 @@ tool-call still produces a lockfile. An unreachable server, a 404 (wrong model o
 URL), or a run where every probe fails aborts the run, so a misconfiguration never
 becomes a poisoned all-zeros baseline.
 
+`examples/agent_tools.json` is a 3-tool schema for the walkthrough above, not a
+sensitivity benchmark — validation testing found it insensitive to real capability
+drift that a 10-tool schema with overlapping tool names and richer argument
+constraints caught cleanly (see [`VALIDATION.md`](VALIDATION.md)). A schema with too
+few tools, or arguments with no real constraints to violate, under-reports
+regressions. Point `--tools` at your own agent's actual tool definitions before
+trusting `gate` in CI.
+
 ## Providers & frameworks
 
 probelock speaks one protocol — OpenAI `/v1/chat/completions` with OpenAI-style

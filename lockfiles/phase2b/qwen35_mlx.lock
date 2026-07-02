@@ -1,0 +1,187 @@
+{
+  "probelock_version": "0.1.0",
+  "label": "qwen3.5:9b-mlx @ Q4_K_M (ollama-mlx)",
+  "model": "qwen3.5:9b-mlx",
+  "quant": "Q4_K_M",
+  "runtime": "ollama-mlx",
+  "tools_fingerprint": "b97d473fa570c779",
+  "traces_fingerprint": null,
+  "n_probes": 32,
+  "samples": 15,
+  "generated_at": "2026-07-02T10:51:20.834014+00:00",
+  "capabilities": {
+    "arg_validity": 0.3333,
+    "arity_robustness": 1.0,
+    "format_adherence": 0.5667,
+    "needle_in_tools": 1.0,
+    "no_hallucinated_tool": 1.0,
+    "required_args": 0.3333,
+    "structured_output": 1.0,
+    "tool_discrimination": 1.0,
+    "tool_permission": 1.0,
+    "tool_restraint": 1.0,
+    "tool_selection": 1.0
+  },
+  "results": [
+    {
+      "probe_id": "tool_selection::create_calendar_event",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::create_calendar_event",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::create_calendar_event",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::create_calendar_event",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::create_calendar_event",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::create_calendar_event",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::create_calendar_event",
+      "capability": "arg_validity",
+      "score": 1.0
+    },
+    {
+      "probe_id": "required_args::create_calendar_event",
+      "capability": "required_args",
+      "score": 1.0
+    },
+    {
+      "probe_id": "structured_output::create_calendar_event",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::search_files",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::search_files",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::search_files",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::search_files",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::search_files",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::search_files",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::search_files",
+      "capability": "arg_validity",
+      "score": 0.0
+    },
+    {
+      "probe_id": "required_args::search_files",
+      "capability": "required_args",
+      "score": 0.0
+    },
+    {
+      "probe_id": "structured_output::search_files",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_selection::send_email",
+      "capability": "tool_selection",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_discrimination::send_email",
+      "capability": "tool_discrimination",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arity_robustness::send_email",
+      "capability": "arity_robustness",
+      "score": 1.0
+    },
+    {
+      "probe_id": "needle_in_tools::send_email",
+      "capability": "needle_in_tools",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_permission::send_email",
+      "capability": "tool_permission",
+      "score": 1.0
+    },
+    {
+      "probe_id": "no_hallucinated_tool::send_email",
+      "capability": "no_hallucinated_tool",
+      "score": 1.0
+    },
+    {
+      "probe_id": "arg_validity::send_email",
+      "capability": "arg_validity",
+      "score": 0.0
+    },
+    {
+      "probe_id": "required_args::send_email",
+      "capability": "required_args",
+      "score": 0.0
+    },
+    {
+      "probe_id": "structured_output::send_email",
+      "capability": "structured_output",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_restraint::trivia",
+      "capability": "tool_restraint",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_restraint::definition",
+      "capability": "tool_restraint",
+      "score": 1.0
+    },
+    {
+      "probe_id": "tool_restraint::greeting",
+      "capability": "tool_restraint",
+      "score": 1.0
+    },
+    {
+      "probe_id": "format_adherence::one_word_yesno",
+      "capability": "format_adherence",
+      "score": 0.13333333333333333
+    },
+    {
+      "probe_id": "format_adherence::exact_token",
+      "capability": "format_adherence",
+      "score": 1.0
+    }
+  ]
+}

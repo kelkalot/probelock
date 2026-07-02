@@ -105,6 +105,15 @@ flags two statistically significant regressions:
   run showed the same capability dip at the same quant (1.00 → 0.90) but
   didn't have enough samples to clear the significance bar.
 
+Provenance note on the Q2_K result: bartowski's quants, including Q2_K, are
+built with imatrix calibration (llama.cpp b3772, calibration dataset linked on
+the model card), not naive round-to-nearest quantization. Imatrix calibration
+generally reduces low-bit quality loss relative to an uncalibrated quant of the
+same size. The −0.300 drop is observed under that more favorable recipe — it's
+a real result for this specific GGUF, not necessarily representative of Q2_K
+quantization in general; an uncalibrated Q2_K, or one calibrated on a
+differently-composed dataset, could show a larger or smaller effect.
+
 This resolves the ambiguity from the 3-tool run: the probe battery does detect
 routine, non-catastrophic capability drift, including at a non-terminal point
 in the ladder — the 3-tool result was a sensitivity limit of that particular
@@ -143,10 +152,42 @@ uv run probelock diff gguf.lock mlx.lock
 | arity_robustness | 0.93 | 1.00 | +0.07 | improved |
 | tool_selection / needle_in_tools / no_hallucinated_tool / tool_restraint / format_adherence | — | — | +0.00 | ok |
 
-Substantial two-directional difference at matched quant: `arg_validity` and
-`required_args` drop sharply on MLX while several other capabilities improve.
-Confirms the probes detect runtime-backend effects independent of
-quantization.
+`arg_validity` and `required_args` drop sharply on MLX while several other
+capabilities move the other way. At 5 samples (15 trials/capability), a swing
+this size still needs a confidence check before it's more than a suggestive
+delta — rerun below.
+
+### Confirming at higher sample count
+
+Same two models, same quant, `--samples 15` (45 trials/capability) instead of
+5, `gate`d at 95% confidence instead of read off the raw diff.
+
+```bash
+uv run probelock probe --tools examples/agent_tools.json \
+    --endpoint http://localhost:11434/v1 --model qwen3.5:9b \
+    --quant Q4_K_M --runtime ollama-gguf --samples 15 --temperature 0.7 -o gguf.lock
+uv run probelock probe --tools examples/agent_tools.json \
+    --endpoint http://localhost:11434/v1 --model qwen3.5:9b-mlx \
+    --quant Q4_K_M --runtime ollama-mlx --samples 15 --temperature 0.7 -o mlx.lock
+uv run probelock diff gguf.lock mlx.lock --confidence 0.95
+```
+
+| Capability | GGUF | MLX | Δ | Status | Significant |
+|---|--:|--:|--:|---|---|
+| arg_validity | 1.00 | 0.33 | −0.67 | REGRESSION | yes |
+| required_args | 1.00 | 0.33 | −0.67 | REGRESSION | yes |
+| tool_permission | 0.93 | 1.00 | +0.07 | improved | — |
+| arity_robustness | 0.98 | 1.00 | +0.02 | ok | — |
+| structured_output | 1.00 | 1.00 | +0.00 | ok | — |
+| tool_discrimination | 1.00 | 1.00 | +0.00 | ok | — |
+| tool_selection / needle_in_tools / no_hallucinated_tool / tool_restraint / format_adherence | — | — | ~+0.00 | ok | — |
+
+`arg_validity` and `required_args` hold at the same magnitude and clear the
+significance bar — a real, confirmed regression, not a small-sample artifact.
+Two of the four "improved" deltas from the 5-sample run (`tool_discrimination`,
+`structured_output`) collapsed to `ok` with more data; only `tool_permission`
+held. That's the expected shape when re-running with more power: real effects
+persist, marginal ones regress toward no difference.
 
 Note: `diff` prints `⚠ different models` for this comparison, because
 `qwen3.5:9b` and `qwen3.5:9b-mlx` are different Ollama manifest names —
