@@ -17,7 +17,7 @@ from rich.table import Table
 from . import __version__
 from .clients import AnyLlmClient, ClientError, HttpClient, LiteLlmClient, SimulatedClient
 from .diff import diff_lockfiles, error_derived_negative_capabilities
-from .ingest import FORMATS, REDACT_PATTERNS, MiningConfig, ingest_file
+from .ingest import FORMATS, REDACT_PATTERNS, MiningConfig, ingest_files
 from .lockfile import read_lockfile, write_lockfile
 from .mined import (
     AUTO_ACCEPT_SAFE,
@@ -349,9 +349,10 @@ def probe(
 
 @app.command()
 def ingest(
-    log: Path = typer.Argument(
-        ..., help="JSONL log of raw agent traffic (recording-proxy output, or your own "
-        "request/response logging)."
+    logs: List[Path] = typer.Argument(
+        ..., help="JSONL log(s) of raw agent traffic (recording-proxy output — pass "
+        "rotated segments together so sessions spanning a rotation still stitch — or "
+        "your own request/response logging)."
     ),
     out: Path = typer.Option(..., "--out", "-o", help="Write the mined probes file here."),
     fmt: str = typer.Option("auto", "--format", help="auto | trace-v1 | openai-jsonl"),
@@ -397,21 +398,23 @@ def ingest(
         per_capability=per_capability,
         max_context_tokens=max_context_tokens,
         redact_patterns=patterns,
-        source=log.name,
     )
     try:
-        probes, summary = ingest_file(log, fmt, config)
-    except FileNotFoundError:
-        _err(f"Log file not found: {log}")
+        probes, summary = ingest_files(logs, fmt, config)
+    except FileNotFoundError as exc:
+        _err(f"Log file not found: {exc.filename or logs[0]}")
         raise typer.Exit(2)
     except OSError as exc:
-        _err(f"Could not read log file {log}: {exc}")
+        _err(f"Could not read log file: {exc}")
         raise typer.Exit(2)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        _err(f"Invalid log file {log}: {exc}")
+        _err(f"Invalid log file: {exc}")
         raise typer.Exit(2)
 
-    save_mined(probes, out, header={"generated_by": f"probelock {__version__}", "source": str(log)})
+    save_mined(probes, out, header={
+        "generated_by": f"probelock {__version__}",
+        "source": ", ".join(str(p) for p in logs),
+    })
 
     console.print(
         f"\n[bold]{len(probes)} probe(s) mined[/] from {summary.records} record(s) — "
@@ -451,6 +454,103 @@ def ingest(
                 f"--redact-patterns if you want committable probes.[/]"
             )
         console.print(f"\nNext: probelock traces review {out}")
+
+
+@app.command(name="proxy")
+def proxy_cmd(
+    upstream: str = typer.Option(
+        ..., "--upstream", help="OpenAI-compatible upstream base URL "
+        "(e.g. http://127.0.0.1:8080 for llama.cpp, http://127.0.0.1:11434 for Ollama)."
+    ),
+    out: Path = typer.Option(
+        ..., "--out", "-o", help="Append trace-v1 JSONL records here. Created 0600: "
+        "this file holds verbatim conversation content — treat it as sensitive."
+    ),
+    listen: str = typer.Option("127.0.0.1:8484", "--listen", help="host:port to listen on."),
+    timeout: float = typer.Option(
+        300.0, "--timeout", help="Upstream read timeout in seconds (local generations are slow)."
+    ),
+    connect_timeout: float = typer.Option(
+        10.0, "--connect-timeout", help="Upstream connect timeout in seconds (fail fast when down)."
+    ),
+    max_size: float = typer.Option(
+        100.0, "--max-size", help="Rotate the log past this many MB (0 = never)."
+    ),
+    max_age: float = typer.Option(
+        0.0, "--max-age", help="Rotate the log after this many minutes (0 = never)."
+    ),
+) -> None:
+    """Record real agent traffic for `probelock ingest`.
+
+    Point your agent's base_url at this proxy; requests are forwarded to --upstream
+    unchanged and each completed chat-completions exchange is appended asynchronously
+    as one trace-v1 record. Recording never blocks or fails a request.
+    """
+    import signal
+    import threading
+
+    from .proxy import ProxyConfig, start_proxy, stop_proxy
+
+    host, _, port_text = listen.rpartition(":")
+    try:
+        port = int(port_text)
+    except ValueError:
+        port = -1
+    if not host or not (0 <= port <= 65535):
+        _err(f"Invalid --listen '{listen}' (use host:port).")
+        raise typer.Exit(2)
+
+    config = ProxyConfig(
+        upstream=upstream, out=out, listen_host=host, listen_port=port,
+        timeout=timeout, connect_timeout=connect_timeout,
+        max_size_mb=max_size, max_age_min=max_age,
+    )
+    try:
+        server = start_proxy(config)
+    except ValueError as exc:
+        _err(str(exc))
+        raise typer.Exit(2)
+    except OSError as exc:  # bind failure, unwritable --out parent, ...
+        _err(f"Could not start proxy: {exc}")
+        raise typer.Exit(2)
+
+    # The OS-assigned address, not the flag value — with --listen host:0 the bound
+    # port is exactly the piece of information the banner exists to provide.
+    host, port = server.server_address[0], server.server_address[1]
+    console.print(f"[bold]probelock proxy[/] listening on [cyan]http://{host}:{port}[/] "
+                  f"→ {escape(upstream)}")
+    console.print(f"Point your agent at [cyan]base_url=\"http://{host}:{port}/v1\"[/]")
+    console.print(
+        f"Recording chat completions to [bold]{escape(str(out))}[/] — verbatim "
+        f"conversation content; keep it out of version control (redaction happens "
+        f"later, at `probelock ingest`)."
+    )
+    console.print("[dim]Ctrl-C to stop.[/]")
+
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())  # supervisors send TERM, not INT
+    try:
+        while not stop.wait(0.5):
+            pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_proxy(server)
+
+    writer = server.writer
+    console.print(
+        f"\n[bold]{writer.written}[/] record(s) written"
+        + (f", [yellow]{writer.dropped} dropped[/]" if writer.dropped else "")
+        + (f", {writer.rotated} rotation(s)" if writer.rotated else "")
+        + (f", [yellow]{server.capture_failures} capture failure(s)[/]"
+           if server.capture_failures else "")
+    )
+    if writer.written or writer.rotated:
+        # After rotation, one directory-qualified glob covers the live file AND every
+        # rotated segment (agent.jsonl, agent-<stamp>.jsonl) — and keeps working even
+        # if the live file itself was just rotated away.
+        source = out.with_name(f"{out.stem}*{out.suffix}") if writer.rotated else out
+        console.print(f"\nNext: probelock ingest {source} --out probes/mined.json")
 
 
 def _final_user_turn(messages) -> str:

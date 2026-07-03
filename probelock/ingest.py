@@ -731,7 +731,14 @@ def _sample(candidates: List[_Candidate], config: MiningConfig) -> List[_Candida
 
 def _freeze(candidate: _Candidate, config: MiningConfig, mined_at: str) -> MinedProbe:
     ex = candidate.exchange
-    sess12 = (ex.session_id or "").removeprefix("sha256:")[:12]
+    session = (ex.session_id or "").removeprefix("sha256:")
+    # Abbreviate long bare content hashes for readable ids; structured ids (the
+    # proxy's "pxy:<run>:<n>") stay whole — truncating those would collide every
+    # session in a run onto one prefix and leave probe identity to the
+    # order-dependent dedup guard.
+    if len(session) > 16 and all(c in "0123456789abcdef" for c in session):
+        session = session[:12]
+    sess12 = session
     reference: Dict[str, Any] = {}
     if candidate.category == "no_tool":
         reference = {"content": "(answered in text, no tool call)"}
@@ -818,11 +825,24 @@ def mine_exchanges(
     return probes, summary
 
 
-def ingest_file(path, fmt: str, config: MiningConfig) -> Tuple[List[MinedProbe], MiningSummary]:
-    """Load + mine in one call — the `probelock ingest` entry point. Raises
-    FileNotFoundError / ValueError / json.JSONDecodeError on bad input, per the
-    cli.py error-wrapping convention."""
-    exchanges, summary = load_exchanges(path, fmt)
+def ingest_files(paths, fmt: str, config: MiningConfig) -> Tuple[List[MinedProbe], MiningSummary]:
+    """Load one or more JSONL logs as a SINGLE corpus and mine — the `probelock
+    ingest` entry point. Multiple paths exist for rotated proxy logs: a session that
+    spans a rotation boundary keeps its continuation evidence only when the segments
+    are stitched together in one load. Raises FileNotFoundError / ValueError /
+    json.JSONDecodeError on bad input, per the cli.py error-wrapping convention."""
+    summary = MiningSummary()
+    exchanges: List[Exchange] = []
+    for path in paths:
+        loaded, part = load_exchanges(path, fmt)
+        exchanges.extend(loaded)
+        summary.records += part.records
+        for reason, n in part.skipped.items():
+            summary.skip(reason, n)
     if not config.source:
-        config.source = Path(path).name
+        config.source = ",".join(sorted({Path(p).name for p in paths}))
     return mine_exchanges(exchanges, config, summary)
+
+
+def ingest_file(path, fmt: str, config: MiningConfig) -> Tuple[List[MinedProbe], MiningSummary]:
+    return ingest_files([path], fmt, config)
