@@ -562,3 +562,29 @@ def test_probe_combines_traces_and_mined_fingerprints(tmp_path):
     # each source contributes: the combined print differs from either alone, so a
     # diff's traces_changed note fires when EITHER trace input changes
     assert len({traces_only, mined_only, both}) == 3
+
+
+def test_proxy_flag_validation_exits_2(tmp_path):
+    out = tmp_path / "t.jsonl"
+    for args in (
+        ["proxy", "--upstream", "http://127.0.0.1:9", "--out", str(out), "--listen", "nope"],
+        ["proxy", "--upstream", "ftp://bad", "--out", str(out), "--listen", "127.0.0.1:0"],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 2, result.output
+
+
+def test_ingest_accepts_multiple_logs_as_one_corpus(tmp_path):
+    # Rotated proxy segments must stitch as one corpus: split the fixture log in two
+    # and expect the exact same probes as ingesting the whole file.
+    lines = _AGENT_LOG.read_text().splitlines()
+    a, b = tmp_path / "part-a.jsonl", tmp_path / "part-b.jsonl"
+    a.write_text(lines[0] + "\n")               # session A's turn 0 ...
+    b.write_text("\n".join(lines[1:]) + "\n")  # ... and its confirming turn 1, apart
+    out = tmp_path / "mined.json"
+    result = runner.invoke(app, ["ingest", str(a), str(b), "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    cats = sorted(p["category"] for p in json.loads(out.read_text())["probes"])
+    assert cats.count("tool_selection") == 2  # incl. the continuation across files
+    assert cats.count("schema_validity") == 5
+    assert cats.count("no_tool") == 1

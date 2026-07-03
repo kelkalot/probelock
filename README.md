@@ -46,7 +46,7 @@ Here the Q4 quant scores 0.33–0.67 on several capabilities where Q8 scored 1.0
 3. **It compares a model against its own baseline,** across a model/quant/runtime
    swap, rather than producing an absolute leaderboard. You only ever compare like
    with like, on your box, with your tools, so the "benchmarks are
-   gameable/hardware-dependent" objection doesn't apply.
+   gameable/hardware-dependent" objection does not apply.
 
 ## Install & run (only needs [uv](https://docs.astral.sh/uv/))
 
@@ -85,7 +85,7 @@ uv run probelock probe --tools examples/agent_tools.json \
 ```
 
 A probe the model rejects (e.g. "model does not support tools") or that times out
-scores **0** for that capability and the run continues, so a model that can't
+scores **0** for that capability and the run continues, so a model that cannot
 tool-call still produces a lockfile. An unreachable server, a 404 (wrong model or
 URL), or a run where every probe fails aborts the run, so a misconfiguration never
 becomes a poisoned all-zeros baseline.
@@ -102,7 +102,7 @@ trusting `gate` in CI.
 
 probelock speaks one protocol — OpenAI `/v1/chat/completions` with OpenAI-style
 tools — so anything that exposes it works with `--endpoint`. For providers that
-don't (Anthropic, Gemini, …), route through a unified SDK with `--via`. Every path
+do not (Anthropic, Gemini, …), route through a unified SDK with `--via`. Every path
 is deterministic; none of them put an LLM in the loop.
 
 | You have… | Use |
@@ -120,8 +120,8 @@ probelock probe --tools tools.json --via anyllm --model mistral/mistral-large-la
 ```
 
 `--via` clients reuse the same caching, sampling, and error semantics as
-`--endpoint`; they're thin adapters over each SDK's OpenAI-shaped response. Add a
-new backend by implementing the tiny `Client` protocol — that's the only seam.
+`--endpoint`; they are thin adapters over each SDK's OpenAI-shaped response. Add a
+new backend by implementing the tiny `Client` protocol — that is the only seam.
 
 ### Recorded demo (Ollama)
 
@@ -135,7 +135,7 @@ asciinema play demo/probelock-demo.cast   # or: bash demo/demo.sh
 
 The tool-calling capabilities drop `1.00 → 0.00` and the gate exits non-zero.
 `tool_restraint`, `tool_permission`, and `no_hallucinated_tool` stay `1.00` (a
-model that can't call tools can't misuse one), and `gemma3:1b` scores `1.00` on
+model that cannot call tools cannot misuse one), and `gemma3:1b` scores `1.00` on
 `format_adherence` vs `0.50` for `qwen3.5:9b`. The diff is per-capability.
 
 Also committed: `qwen3.5:9b` vs `lfm2.5-thinking:1.2b`:
@@ -161,10 +161,10 @@ The 1.2B model matches `qwen3.5:9b` on tool selection, discrimination,
 | `structured_output`   | Emits schema-valid JSON on demand (no tools, no fences)   | parse + `jsonschema` |
 | `tool_restraint`      | Does **not** call a tool for a task that needs none (over-trigger) | no tool call |
 | `tool_permission`     | Does **not** call a tool it was explicitly forbidden to use | forbidden tool absent |
-| `no_hallucinated_tool`| Does **not** fabricate a call to a tool that wasn't offered | called ⊆ offered |
+| `no_hallucinated_tool`| Does **not** fabricate a call to a tool that was not offered | called ⊆ offered |
 | `format_adherence`    | Follows an exact output constraint                        | exact match |
 
-Three are **negative** probes (a higher score means the bad behavior didn't
+Three are **negative** probes (a higher score means the bad behavior did not
 happen): `tool_restraint` (over-triggering), `tool_permission` (calling a forbidden
 tool), and `no_hallucinated_tool` (fabricating a tool). All probes are derived from
 the tool schemas, not hand-authored.
@@ -200,7 +200,7 @@ uv run probelock probe  --tools tools.json --traces traces.json \
 ```
 
 A traces file is a small, stable JSON schema probelock defines itself — **not** raw
-OpenTelemetry — because OTel's own span attribute layout isn't stable across libraries or
+OpenTelemetry — because OTel's own span attribute layout is not stable across libraries or
 versions (litellm has already changed where it puts request/response attributes once, and
 has a newer, differently-shaped opt-in integration). Converting your export into this shape
 is a one-time step you own; see
@@ -228,7 +228,7 @@ map cleanly onto "replay this real context, check the candidate still behaves va
 ids carry a `::traced::` marker if you want to inspect the split). The rest stay purely
 schema-derived: `needle_in_tools`, `tool_permission`, `no_hallucinated_tool`, and
 `tool_restraint` need a synthetic perturbation (an injected distractor tool, a forbidden-tool
-instruction, a removed tool) that a passively recorded trace doesn't naturally contain;
+instruction, a removed tool) that a passively recorded trace does not naturally contain;
 `format_adherence` needs an exact-text prompt, not a tool-calling decision point; and
 `arity_robustness` needs its own explicit "fill EVERY parameter, including optional ones"
 instruction to mean anything — a real conversation was never asked for that, so replaying it
@@ -238,20 +238,46 @@ robustness.
 **Unlike a tool schema, a traces file contains real conversation content.** `probe --traces`
 prints a warning every time, and the lockfile records a `traces_fingerprint` so a `diff`
 flags a baseline/candidate pair whose trace inputs differ — but review and redact the file
-yourself before committing it, the same way you'd review any fixture with real data in it.
+yourself before committing it, the same way you would review any fixture with real data in it.
 
 Tested against a real llama.cpp regression (commit-level, not synthetic): `gate` fails on
 the regressed commit and passes on an adjacent, unrelated commit. See
 [`VALIDATION.md`](VALIDATION.md) for the test setup and results, and
 [`fixtures/gptoss_regression_trace.json`](fixtures/gptoss_regression_trace.json) to reproduce it.
 
+## Recording traffic (`probelock proxy`) (experimental)
+
+If your stack does not already log requests, the recording proxy captures them with one
+line changed in the agent:
+
+```bash
+probelock proxy --listen 127.0.0.1:8484 \
+                --upstream http://127.0.0.1:11434 \
+                --out traces/agent.jsonl
+# agent side: base_url = "http://127.0.0.1:8484/v1"
+```
+
+Every request is forwarded to the upstream unchanged (streaming included — SSE flows
+token by token and is reassembled for the record afterwards, tool-call deltas and all);
+each completed chat-completions exchange is appended asynchronously as one `trace-v1`
+JSONL record. Recording is strictly non-invasive: on any internal logging error the
+request is still served and a warning goes to stderr. Failed or truncated exchanges
+(upstream errors, mid-stream disconnects) are logged with a failing status so `ingest`
+skips them instead of mining half-generated responses. Multi-turn conversations are
+stitched into sessions without any agent cooperation (restarting the proxy mid-conversation
+splits that conversation into two sessions — harmless, but it weakens confirmation
+evidence, so prefer restarting between runs), `--max-size` / `--max-age` rotate
+the log, and the file is created `0600` — it holds **verbatim conversation content**;
+keep it out of version control (redaction happens later, at `ingest`).
+
 ## Mining probes from raw agent logs (experimental)
 
 `--traces` (above) replays a *curated* export you assembled by hand. `probelock ingest`
-goes one step earlier: point it at a raw request/response log of real agent traffic and it
-mines probes for you — multi-turn, realistic regression tests with near-zero authoring
-effort, still scored by the same deterministic checks (LLMs may appear in *trace
-generation* — that's your own agent — but never in *scoring*).
+goes one step earlier: point it at a raw request/response log of real agent traffic —
+the proxy's output, or your own logging — and it mines probes for you: multi-turn,
+realistic regression tests with near-zero authoring effort, still scored by the same
+deterministic checks (LLMs may appear in *trace generation* — that is your own agent —
+but never in *scoring*).
 
 ```bash
 probelock ingest traces/agent.jsonl --out probes/mined.json   # everything lands "pending"
@@ -259,6 +285,10 @@ probelock traces review probes/mined.json                     # activate probes 
 probelock probe --tools tools.json --mined probes/mined.json \
     --endpoint http://localhost:11434/v1 --model llama3.1:8b -o candidate.lock
 ```
+
+`ingest` accepts several logs at once (`probelock ingest agent.jsonl agent-*.jsonl`) —
+pass a rotated set together so sessions spanning a rotation boundary keep their
+confirmation evidence.
 
 Two input shapes are auto-detected: the native `trace-v1` record (one JSON object per
 line with `request`/`response.message`, what a recording proxy writes) and `openai-jsonl`
@@ -282,7 +312,7 @@ diagnostic ("context-length-sensitive regression").
 
 Privacy defaults are conservative. Argument values in frozen contexts are always
 replaced with structure-preserving placeholders (`"query": "<str:47ch>"`); message
-content stays verbatim (that's what makes replay realistic), so mined probes carry
+content stays verbatim (that is what makes replay realistic), so mined probes carry
 `"sensitive": true` and `probe -o` refuses to include them in a written lockfile
 without `--allow-sensitive`. If you want committable probes, opt in to scrubbing with
 `ingest --redact-patterns emails,phones,paths`. Identical contexts are deduplicated
@@ -341,9 +371,8 @@ probelock diff probelock.lock candidate.lock --format markdown >> "$GITHUB_STEP_
 
 ## Roadmap
 
-- `probelock proxy`: a recording reverse proxy that writes `trace-v1` logs for `ingest`
-  from any OpenAI-compatible stack (llama.cpp, Ollama, vLLM, LM Studio) — one `base_url`
-  change in the agent, strict passthrough-on-error.
+- Proxy hardening: a static Go/Rust binary beside the reference Python implementation,
+  and streaming-reassembly edge cases (multi-line SSE events, resume-after-disconnect).
 - More `ingest` adapters (Anthropic logs, OTel GenAI spans) and an opt-in
   `--cluster embeddings` mode beside the default dependency-free dedup.
 - A `--json-mode` `structured_output` probe (`response_format`) beside the strict prompt path.
