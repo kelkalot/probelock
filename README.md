@@ -325,6 +325,10 @@ probes per (tool, category) preferring longer contexts and later turns, and ever
 the pipeline skips (failed calls, forced `tool_choice`, oversized contexts, ambiguous
 agreement) is counted and reported — never silently dropped.
 
+The full pipeline is validated against real agent traffic on real local models —
+including a runtime swap the gate catches and real frozen-mistake probes the review
+step rejects — in [`VALIDATION-TRACES.md`](VALIDATION-TRACES.md).
+
 ## Sampling & noisy gates
 
 With one sample per probe, a capability backed by 3 tools quantizes to
