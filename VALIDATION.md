@@ -9,6 +9,10 @@ Three tests of probelock's regression detection against real local models on a
 - **Regression replay** — a real, documented, commit-level llama.cpp
   regression, as ground truth.
 
+(The trace pipeline — proxy capture, mining, review, replay — has its own
+validation in [`VALIDATION-TRACES.md`](VALIDATION-TRACES.md), kept separate so each
+round keeps its own overview.)
+
 The regression replay ships a reproducible fixture in this repo
 ([`fixtures/gptoss_regression_trace.json`](fixtures/gptoss_regression_trace.json)),
 as does the harder tool schema used in the quantization ladder follow-up
