@@ -264,8 +264,9 @@ force the code path this test targets.
 - `llama-server -fa` requires an explicit value (`--flash-attn auto`) on
   recent builds; the bare flag misparses a following `-hf` argument as its
   value.
-- `probelock probe --traces` still requires `--tools`; the traced probes carry
-  their own embedded tool definitions regardless of what's in the schema file.
+- `probelock probe --traces` required `--tools` at the time of this validation,
+  even though traced probes carry their own embedded tool definitions. Fixed in
+  v0.3.1: `--tools` is now optional whenever `--traces` or `--mined` supply probes.
 - Running two `llama-server` instances concurrently on one GPU crashed one of
   them (Metal contention) mid-probe during testing. Don't run concurrent GPU
   inference workloads on a single-GPU host.

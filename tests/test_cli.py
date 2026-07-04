@@ -588,3 +588,55 @@ def test_ingest_accepts_multiple_logs_as_one_corpus(tmp_path):
     assert cats.count("tool_selection") == 2  # incl. the continuation across files
     assert cats.count("schema_validity") == 5
     assert cats.count("no_tool") == 1
+
+
+# --- --tools optional when traces/mined supply probes (validation rough edge) -------
+
+
+def test_probe_traces_only_needs_no_tools_file(tmp_path):
+    lock = tmp_path / "traced.lock"
+    result = runner.invoke(app, [
+        "probe", "--traces", str(_SAMPLE_TRACES), "--simulate", str(_SIM_Q8),
+        "-o", str(lock)])
+    assert result.exit_code == 0, result.output
+    data = json.loads(lock.read_text())
+    assert data["tools_fingerprint"] == ""  # no schema battery ran
+    assert data["traces_fingerprint"]
+    assert "tool_selection" in data["capabilities"]  # traced probes replayed
+    assert data["n_probes"] > 0
+
+
+def test_derive_traces_only_needs_no_tools_file():
+    result = runner.invoke(app, ["derive", "--traces", str(_SAMPLE_TRACES)])
+    assert result.exit_code == 0, result.output
+    assert "::traced::" in result.output
+
+
+def test_probe_mined_only_needs_no_tools_file(tmp_path):
+    mined = _ingest(tmp_path)
+    runner.invoke(app, ["traces", "review", str(mined), "--auto-accept", "schema_validity"])
+    lock = tmp_path / "mined-only.lock"
+    result = runner.invoke(app, [
+        "probe", "--mined", str(mined), "--simulate", str(_SIM_Q8),
+        "--allow-sensitive", "-o", str(lock)])
+    assert result.exit_code == 0, result.output
+    caps = json.loads(lock.read_text())["capabilities"]
+    assert list(caps) == ["traced_schema_validity"]
+
+
+def test_probe_without_any_source_exits_2():
+    result = runner.invoke(app, ["probe", "--simulate", str(_SIM_Q8)])
+    assert result.exit_code == 2, result.output
+    assert "--tools, --traces, or --mined" in result.output
+    result = runner.invoke(app, ["derive"])
+    assert result.exit_code == 2, result.output
+
+
+def test_probe_with_empty_battery_exits_2(tmp_path):
+    # a mined file with nothing accepted and no --tools: the battery is empty and a
+    # zero-probe lockfile can gate nothing
+    mined = _ingest(tmp_path)  # everything still pending
+    result = runner.invoke(app, [
+        "probe", "--mined", str(mined), "--simulate", str(_SIM_Q8)])
+    assert result.exit_code == 2, result.output
+    assert "empty" in result.output

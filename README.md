@@ -199,6 +199,10 @@ uv run probelock probe  --tools tools.json --traces traces.json \
     --endpoint http://localhost:11434/v1 --model llama3.1:8b -o candidate.lock
 ```
 
+`--tools` is optional here: traced probes replay their own embedded tool definitions,
+so a trace-only run (`probe --traces traces.json ...`) needs no schema file. The same
+holds for `--mined` below. Provide `--tools` when you also want the synthetic battery.
+
 A traces file is a small, stable JSON schema probelock defines itself — **not** raw
 OpenTelemetry — because OTel's own span attribute layout is not stable across libraries or
 versions (litellm has already changed where it puts request/response attributes once, and

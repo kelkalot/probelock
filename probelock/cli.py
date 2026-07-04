@@ -160,14 +160,27 @@ def _mined_battery(path: Path):
     return accepted, [to_probe(p) for p in accepted]
 
 
+_TOOLS_OPTION = typer.Option(
+    None, "--tools", "-t", help="OpenAI-style tools JSON file (optional when --traces "
+    "or --mined supply probes — those carry their own embedded tool definitions)."
+)
+
+
+def _require_probe_source(tools, traces, mined) -> None:
+    if tools is None and traces is None and mined is None:
+        _err("Provide at least one probe source: --tools, --traces, or --mined.")
+        raise typer.Exit(2)
+
+
 @app.command()
 def derive(
-    tools: Path = typer.Option(..., "--tools", "-t", help="OpenAI-style tools JSON file."),
+    tools: Optional[Path] = _TOOLS_OPTION,
     traces: Optional[Path] = _TRACES_OPTION,
     mined: Optional[Path] = _MINED_OPTION,
 ) -> None:
     """Show the probe battery that would be generated from a toolset (transparency)."""
-    probes = derive_probes(_load_tools_or_exit(tools))
+    _require_probe_source(tools, traces, mined)
+    probes = derive_probes(_load_tools_or_exit(tools)) if tools is not None else []
     if traces is not None:
         probes = probes + derive_traced_probes(_load_traces_or_exit(traces))
     if mined is not None:
@@ -183,7 +196,7 @@ def derive(
 
 @app.command()
 def probe(
-    tools: Path = typer.Option(..., "--tools", "-t", help="OpenAI-style tools JSON file."),
+    tools: Optional[Path] = _TOOLS_OPTION,
     simulate: Optional[Path] = typer.Option(
         None, "--simulate", "-s", help="Run against a deterministic profile (no model)."
     ),
@@ -215,9 +228,18 @@ def probe(
     ),
 ) -> None:
     """Run the probe battery and produce a capability lockfile."""
-    tool_list = _load_tools_or_exit(tools)
-    probes = derive_probes(tool_list)
-    fingerprint = tools_fingerprint(tool_list)
+    _require_probe_source(tools, traces, mined)
+    if tools is not None:
+        tool_list = _load_tools_or_exit(tools)
+        probes = derive_probes(tool_list)
+        fingerprint = tools_fingerprint(tool_list)
+    else:
+        # Trace-only run: traced/mined probes replay their own embedded tool
+        # definitions, so there is no schema battery and no toolset to fingerprint.
+        # The empty fingerprint is stable, so two trace-only lockfiles diff cleanly,
+        # while a trace-only vs schema-derived pair still flags tools_changed.
+        probes = []
+        fingerprint = ""
 
     traces_fp = None
     if traces is not None:
@@ -263,6 +285,12 @@ def probe(
         traces_fp = hashlib.sha256("+".join(fps).encode()).hexdigest()[:16]
     elif fps:
         traces_fp = fps[0]
+
+    if not probes:
+        # Possible without --tools: a traces file that derives nothing, or a mined
+        # file with no accepted probes. A zero-probe lockfile can gate nothing.
+        _err("The probe battery is empty — nothing derived from the given sources.")
+        raise typer.Exit(2)
 
     try:
         if simulate is not None:
