@@ -16,7 +16,7 @@ from rich.table import Table
 
 from . import __version__
 from .clients import AnyLlmClient, ClientError, HttpClient, LiteLlmClient, SimulatedClient
-from .diff import diff_lockfiles, error_derived_negative_capabilities
+from .diff import diff_lockfiles, error_derived_negative_capabilities, model_family
 from .ingest import FORMATS, REDACT_PATTERNS, MiningConfig, ingest_files
 from .lockfile import read_lockfile, write_lockfile
 from .mined import (
@@ -34,6 +34,7 @@ from .mined import (
 from .probes import derive_probes, tools_fingerprint
 from .runner import run_probes
 from .traces import derive_traced_probes, load_trace_records, traces_fingerprint
+from .trend import trend_lockfiles
 
 app = typer.Typer(
     add_completion=False,
@@ -786,6 +787,20 @@ def _cell(value, signed=False) -> str:
     return f"{value:+.2f}" if signed else f"{value:.2f}"
 
 
+def _family(lock):
+    return model_family(lock.model, lock.quant, lock.runtime)
+
+
+def _variant(lock) -> str:
+    """A compact model/quant/runtime label for the within-model-swap note."""
+    parts = [lock.model or "?"]
+    if lock.quant:
+        parts.append(lock.quant)
+    if lock.runtime:
+        parts.append(lock.runtime)
+    return "/".join(parts)
+
+
 def _diff_notes(result, b, c):
     """Plain-text comparison caveats, shared by the table and markdown renderers
     so the two can never drift out of sync."""
@@ -794,16 +809,16 @@ def _diff_notes(result, b, c):
         notes.append("⚠ toolsets differ — comparison may not be apples-to-apples.")
     if result.traces_changed:
         notes.append("⚠ trace inputs differ — comparison may not be apples-to-apples.")
-    if b.model and c.model and b.model != c.model:
+    if b.model and c.model and _family(b) != _family(c):
         notes.append(
             f"⚠ different models ({b.model} → {c.model}) — cross-model comparison, "
             f"not a within-model regression check."
         )
-    elif b.model and (b.quant, b.runtime) != (c.quant, c.runtime):
-        notes.append(
-            f"within-model swap: {b.quant or 'native'}/{b.runtime or '?'} → "
-            f"{c.quant or 'native'}/{c.runtime or '?'}"
-        )
+    elif b.model and (b.model, b.quant, b.runtime) != (c.model, c.quant, c.runtime):
+        # Same model family, but some variant axis moved. Show the full triple: with
+        # Ollama the runtime/quant lives in the model id, so quant/runtime fields alone
+        # would read "native → native" on a real runtime swap.
+        notes.append(f"within-model swap: {_variant(b)} → {_variant(c)}")
     if b.samples != c.samples:
         notes.append(
             f"⚠ sample counts differ ({b.samples} vs {c.samples}); --confidence has "
@@ -999,7 +1014,7 @@ def gate(
             f"confidence bar (noisy ↓) — raise --samples to confirm or clear them.[/]"
         )
 
-    if require_same_model and b.model and c.model and b.model != c.model:
+    if require_same_model and b.model and c.model and _family(b) != _family(c):
         console.print(
             f"\n[bold red]INVALID[/] — --require-same-model set but models differ "
             f"({escape(b.model)} vs {escape(c.model)})."
@@ -1010,6 +1025,191 @@ def gate(
         console.print(f"\n[bold red]FAIL[/] — capabilities regressed or removed: {names}")
         raise typer.Exit(1)
     console.print(f"\n[bold green]PASS[/] — no capability regressed beyond {max_drop:.2f}.")
+
+
+# Trend status display, mirroring _STATUS_LABELS: (rich markup, plain markdown).
+_TREND_LABELS = {
+    "regressed": ("[bold red]↓ regressed[/]", "⚠️ regressed"),
+    "removed": ("[bold red]⛔ removed[/]", "⛔ removed"),
+    "improved": ("[cyan]↑ improved[/]", "⬆️ improved"),
+    "unstable": ("[yellow]~ unstable[/]", "〰️ unstable"),
+    "stable": ("[green]= stable[/]", "✅ stable"),
+    "partial": ("[dim]· partial[/]", "· partial"),
+}
+_TREND_HTML = {  # status -> (css class, label)
+    "regressed": ("bad", "regressed"), "removed": ("bad", "removed"),
+    "improved": ("good", "improved"), "unstable": ("warn", "unstable"),
+    "stable": ("ok", "stable"), "partial": ("dim", "partial"),
+}
+
+
+def _trend_notes(locks) -> list:
+    """Ladder-wide caveats: mixed toolsets, mixed model families, uneven samples."""
+    notes = []
+    fps = {lk.tools_fingerprint for lk in locks if lk.tools_fingerprint}
+    if len(fps) > 1:
+        notes.append("⚠ toolsets differ across the ladder — comparison may not be apples-to-apples.")
+    tfps = {lk.traces_fingerprint for lk in locks if lk.traces_fingerprint}
+    if len(tfps) > 1:
+        notes.append("⚠ trace inputs differ across the ladder — comparison may not be apples-to-apples.")
+    families = {model_family(lk.model, lk.quant, lk.runtime) for lk in locks if lk.model}
+    if len(families) > 1:
+        notes.append(
+            f"⚠ the ladder mixes {len(families)} model families ({', '.join(sorted(families))}) "
+            f"— trend reads as within-model; this is a cross-model comparison."
+        )
+    if len({lk.samples for lk in locks}) > 1:
+        notes.append("⚠ sample counts differ across the ladder — steps have uneven statistical power.")
+    return notes
+
+
+def _render_trend(result, locks) -> None:
+    # Not expand=True: with many ladder columns, size to content so the 4-char scores
+    # ("1.00") stay legible instead of being squeezed to "1…".
+    table = Table(title="capability trend")
+    table.add_column("Capability", no_wrap=True)
+    for lbl in result.labels:
+        table.add_column(escape(lbl), justify="right")
+    table.add_column("Δ", justify="right")
+    table.add_column("Trend", no_wrap=True)
+    for r in result.rows:
+        cells = [escape(r.capability)]
+        cells += [_cell(v) for v in r.values]
+        cells.append(_cell(r.delta, signed=True))
+        cells.append(_TREND_LABELS.get(r.status, (r.status, r.status))[0])
+        table.add_row(*cells)
+    console.print(table)
+    for note in _trend_notes(locks):
+        console.print(f"[yellow]{escape(note)}[/]")
+
+
+def _markdown_trend(result, locks) -> str:
+    header = "| Capability | " + " | ".join(f"`{lbl}`" for lbl in result.labels) + " | Δ | Trend |"
+    sep = "|---|" + "--:|" * len(result.labels) + "--:|---|"
+    lines = [f"### probelock trend: {len(result.labels)} lockfiles", "", header, sep]
+    for r in result.rows:
+        vals = " | ".join(_cell(v) for v in r.values)
+        badge = _TREND_LABELS.get(r.status, (r.status, r.status))[1]
+        lines.append(f"| `{r.capability}` | {vals} | {_cell(r.delta, signed=True)} | {badge} |")
+    lines.append("")
+    if result.regressed:
+        names = ", ".join(f"`{r.capability}`" for r in result.regressed)
+        lines.append(f"**{len(result.regressed)} capability(ies) regressed across the ladder:** {names}")
+    else:
+        lines.append("**No capability regressed across the ladder.**")
+    for note in _trend_notes(locks):
+        lines.append(f"\n> {note}")
+    return "\n".join(lines)
+
+
+def _trend_payload(result, locks) -> dict:
+    return {
+        "labels": result.labels,
+        "lockfiles": [
+            {"label": lk.label, "model": lk.model, "quant": lk.quant,
+             "runtime": lk.runtime, "samples": lk.samples}
+            for lk in locks
+        ],
+        "max_drop": result.max_drop,
+        "rows": [
+            {"capability": r.capability, "values": r.values, "delta": r.delta,
+             "worst_step": r.worst_step, "status": r.status, "monotonic": r.monotonic}
+            for r in result.rows
+        ],
+    }
+
+
+def _sparkline(values) -> str:
+    """A tiny inline-SVG line over the present scores (already 0..1) — the trend, seen."""
+    pts = [(i, v) for i, v in enumerate(values) if v is not None]
+    if len(pts) < 2:
+        return ""
+    step, h = 14, 18
+    w = step * (len(values) - 1) + 4
+    coords = " ".join(f"{2 + i * step},{2 + (1 - v) * (h - 4):.1f}" for i, v in pts)
+    return (
+        f"<svg width='{w}' height='{h}' viewBox='0 0 {w} {h}' "
+        f"style='vertical-align:middle'><polyline fill='none' stroke='#6b7280' "
+        f"stroke-width='1.5' points='{coords}'/></svg>"
+    )
+
+
+def _html_trend(result, locks) -> str:
+    def esc(s):
+        return _html.escape(str(s))
+
+    head = "".join(f"<th class='num'>{esc(lbl)}</th>" for lbl in result.labels)
+    rows = []
+    for r in result.rows:
+        cls, label = _TREND_HTML.get(r.status, ("dim", r.status))
+        cells = "".join(f"<td class='num'>{_cell(v)}</td>" for v in r.values)
+        rows.append(
+            f"<tr><td class='cap'>{esc(r.capability)}</td>{cells}"
+            f"<td class='num'>{_cell(r.delta, signed=True)}</td>"
+            f"<td>{_sparkline(r.values)}</td>"
+            f"<td><span class='badge {cls}'>{esc(label)}</span></td></tr>"
+        )
+    banner = (
+        f"<div class='banner fail'>{len(result.regressed)} capability(ies) regressed "
+        f"across the ladder: {esc(', '.join(r.capability for r in result.regressed))}</div>"
+        if result.regressed else
+        "<div class='banner pass'>No capability regressed across the ladder.</div>"
+    )
+    notes = "".join(f"<p class='note'>{esc(n)}</p>" for n in _trend_notes(locks))
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<meta name='viewport' content='width=device-width,initial-scale=1'><style>{_HTML_CSS}</style>"
+        "<title>probelock trend</title></head><body>"
+        "<h1>probelock capability trend</h1>"
+        f"<p class='sub'>{len(result.labels)} lockfiles, in ladder order</p>"
+        f"{banner}"
+        f"<table><thead><tr><th>Capability</th>{head}<th>Δ</th><th></th><th>Trend</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>{notes}"
+        "<footer>Generated by probelock — deterministic, no LLM judge.</footer>"
+        "</body></html>"
+    )
+
+
+@app.command()
+def trend(
+    lockfiles: List[Path] = typer.Argument(
+        ..., help="Two or more lockfiles in ladder order (e.g. Q8_0 Q6_K Q5_K_M Q4_K_M …)."
+    ),
+    max_drop: float = typer.Option(
+        0.05, "--max-drop", help="Threshold for the regressed / unstable annotations."
+    ),
+    fmt: str = typer.Option("table", "--format", help="table | markdown | json | html"),
+) -> None:
+    """Track each capability across an ordered ladder of lockfiles (informational).
+
+    Where `diff` compares two lockfiles, `trend` shows N — a quant ladder Q8→Q4→Q2, or
+    the same model over time — so you can see where a capability holds and where it
+    cliffs. The lockfiles are shown in the order given; that order is the axis. This is
+    informational: it never fails on a regression (use `gate` pairwise for CI). Exit 2
+    is reserved for bad input (unknown format, fewer than two lockfiles, unreadable
+    lockfile).
+    """
+    if fmt not in ("table", "markdown", "json", "html"):
+        _err(f"Unknown --format '{fmt}' (use table | markdown | json | html).")
+        raise typer.Exit(2)
+    if len(lockfiles) < 2:
+        _err("trend needs at least two lockfiles.")
+        raise typer.Exit(2)
+    locks = [_read_lock(p) for p in lockfiles]
+    # Column header = the file's stem: in a ladder the labels share a long prefix
+    # (same model, only the quant differs), so the user-chosen filename (Q8_0.lock ->
+    # "Q8_0") is the tight, intentional per-column key. Full metadata stays in --format
+    # json under lockfiles[].
+    labels = [p.stem for p in lockfiles]
+    result = trend_lockfiles(locks, labels, max_drop)
+    if fmt == "markdown":
+        print(_markdown_trend(result, locks))
+    elif fmt == "json":
+        print(json.dumps(_trend_payload(result, locks), indent=2))
+    elif fmt == "html":
+        print(_html_trend(result, locks))
+    else:
+        _render_trend(result, locks)
 
 
 _TEMPLATE_TOOLS = """\
