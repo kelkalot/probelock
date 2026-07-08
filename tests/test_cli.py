@@ -640,3 +640,130 @@ def test_probe_with_empty_battery_exits_2(tmp_path):
         "probe", "--mined", str(mined), "--simulate", str(_SIM_Q8)])
     assert result.exit_code == 2, result.output
     assert "empty" in result.output
+
+
+# --- trend command (N-way ladder) --------------------------------------------------
+
+
+def _ladder(tmp_path):
+    # a 3-point quant ladder where tool_selection cliffs and structured_output dips
+    specs = [
+        ("Q8_0", {"tool_selection": 1.0, "structured_output": 1.0, "tool_restraint": 1.0}),
+        ("Q4_K_M", {"tool_selection": 1.0, "structured_output": 0.4, "tool_restraint": 1.0}),
+        ("Q2_K", {"tool_selection": 0.33, "structured_output": 1.0, "tool_restraint": 1.0}),
+    ]
+    paths = []
+    for name, caps in specs:
+        p = tmp_path / f"{name}.lock"
+        _write_lock(p, "qwen3.5:9b", caps)
+        paths.append(str(p))
+    return paths
+
+
+def test_trend_table_uses_filename_stems_as_columns(tmp_path):
+    result = runner.invoke(app, ["trend", *_ladder(tmp_path)])
+    assert result.exit_code == 0, result.output
+    for stem in ("Q8_0", "Q4_K_M", "Q2_K"):
+        assert stem in result.output
+
+
+def test_trend_markdown_flags_regression_and_instability(tmp_path):
+    result = runner.invoke(app, ["trend", *_ladder(tmp_path), "--format", "markdown"])
+    assert result.exit_code == 0, result.output
+    assert "| `Q8_0` | `Q4_K_M` | `Q2_K` |" in result.output
+    assert "regressed" in result.output      # tool_selection 1.0 -> 0.33
+    assert "unstable" in result.output        # structured_output 1.0 -> 0.4 -> 1.0
+
+
+def test_trend_json_carries_values_and_metadata(tmp_path):
+    result = runner.invoke(app, ["trend", *_ladder(tmp_path), "--format", "json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["labels"] == ["Q8_0", "Q4_K_M", "Q2_K"]
+    assert len(payload["lockfiles"]) == 3
+    ts = next(r for r in payload["rows"] if r["capability"] == "tool_selection")
+    assert ts["values"] == [1.0, 1.0, 0.33]
+    assert ts["status"] == "regressed"
+
+
+def test_trend_html_has_sparkline_and_banner(tmp_path):
+    result = runner.invoke(app, ["trend", *_ladder(tmp_path), "--format", "html"])
+    assert result.exit_code == 0, result.output
+    assert result.output.lstrip().startswith("<!doctype html>")
+    assert "<svg" in result.output and "polyline" in result.output  # the sparkline
+    assert "regressed across the ladder" in result.output
+
+
+def test_trend_needs_two_lockfiles(tmp_path):
+    p = tmp_path / "only.lock"
+    _write_lock(p, "m", {"tool_selection": 1.0})
+    result = runner.invoke(app, ["trend", str(p)])
+    assert result.exit_code == 2, result.output
+    assert "at least two" in result.output
+
+
+def test_trend_bad_format_exits_2(tmp_path):
+    result = runner.invoke(app, ["trend", *_ladder(tmp_path), "--format", "csv"])
+    assert result.exit_code == 2, result.output
+
+
+def test_trend_warns_on_mixed_model_families(tmp_path):
+    a, b = tmp_path / "a.lock", tmp_path / "b.lock"
+    _write_lock(a, "qwen3.5:9b", {"tool_selection": 1.0})
+    _write_lock(b, "llama3.1:8b", {"tool_selection": 1.0})
+    result = runner.invoke(app, ["trend", str(a), str(b)])
+    assert result.exit_code == 0, result.output
+    assert "mixes" in result.output and "model families" in result.output
+
+
+def test_trend_missing_lockfile_exits_2(tmp_path):
+    p = tmp_path / "real.lock"
+    _write_lock(p, "m", {"tool_selection": 1.0})
+    result = runner.invoke(app, ["trend", str(p), str(tmp_path / "nope.lock")])
+    assert result.exit_code == 2, result.output
+
+
+# --- runtime-swap fix: within-model runtime swap is NOT flagged cross-model ---------
+
+
+def _write_lock_rt(path, model, runtime, caps):
+    path.write_text(json.dumps({
+        "model": model, "quant": "", "runtime": runtime,
+        "tools_fingerprint": "fp", "capabilities": caps, "results": [], "n_probes": 0,
+    }))
+
+
+def test_diff_runtime_swap_reads_as_within_model(tmp_path):
+    # qwen3.5:9b -> qwen3.5:9b-mlx is a runtime swap (Ollama bakes runtime into the id),
+    # not a cross-model comparison
+    b, c = tmp_path / "b.lock", tmp_path / "c.lock"
+    _write_lock_rt(b, "qwen3.5:9b", "ollama", {"tool_selection": 1.0})
+    _write_lock_rt(c, "qwen3.5:9b-mlx", "ollama-mlx", {"tool_selection": 0.6})
+    result = runner.invoke(app, ["diff", str(b), str(c)])
+    assert result.exit_code == 0, result.output
+    assert "different models" not in result.output
+    assert "within-model swap" in result.output
+
+
+def test_diff_still_flags_genuine_cross_model(tmp_path):
+    b, c = tmp_path / "b.lock", tmp_path / "c.lock"
+    _write_lock_rt(b, "qwen3.5:9b", "ollama", {"tool_selection": 1.0})
+    _write_lock_rt(c, "qwen3.5:32b", "ollama", {"tool_selection": 1.0})
+    result = runner.invoke(app, ["diff", str(b), str(c)])
+    assert "different models" in result.output  # 9b vs 32b: real cross-model
+
+
+def test_gate_require_same_model_allows_runtime_swap(tmp_path):
+    b, c = tmp_path / "b.lock", tmp_path / "c.lock"
+    _write_lock_rt(b, "llama3.1:8b-instruct-q8_0", "ollama", {"tool_selection": 1.0})
+    _write_lock_rt(c, "llama3.1:8b-instruct-q4_K_M", "ollama", {"tool_selection": 1.0})
+    result = runner.invoke(app, ["gate", "-b", str(b), "-c", str(c), "--require-same-model"])
+    assert result.exit_code == 0, result.output  # quant swap of one model, not INVALID
+
+
+def test_gate_require_same_model_still_blocks_true_cross_model(tmp_path):
+    b, c = tmp_path / "b.lock", tmp_path / "c.lock"
+    _write_lock_rt(b, "qwen3.5:9b", "ollama", {"tool_selection": 1.0})
+    _write_lock_rt(c, "mistral:7b", "ollama", {"tool_selection": 1.0})
+    result = runner.invoke(app, ["gate", "-b", str(b), "-c", str(c), "--require-same-model"])
+    assert result.exit_code == 2, result.output

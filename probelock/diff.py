@@ -8,12 +8,45 @@ hand-authored cross-provider matrix does not give you.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .models import Lockfile
 from .scoring import NEGATIVE_CAPABILITIES
 from .stats import is_significant_regression
+
+# Runtime/backend and quantization markers that some registries (Ollama especially)
+# bake into the model id as a trailing "-<token>". They describe HOW a model runs, not
+# WHICH model it is — so a within-model runtime or quant swap must not read as a
+# cross-model comparison just because the id string changed.
+_RUNTIME_MARKERS = frozenset({
+    "mlx", "gguf", "ggml", "metal", "cuda", "rocm", "cpu", "vulkan", "vllm",
+    "mps", "coreml", "onnx", "tensorrt", "sycl", "hip",
+})
+# Quantization tags, including the importance-matrix "IQ" family (iq2_xs, iq4_nl, …)
+# that Ollama/llama.cpp bake into the id — missing them made a within-model quant swap
+# read as cross-model.
+_QUANT_MARKER = re.compile(r"^(iq\d.*|q\d.*|fp?\d+|f\d+|bf\d+|int\d+|awq|gptq)$")
+
+
+def model_family(model: str, quant: str = "", runtime: str = "") -> str:
+    """Model identity with runtime/quant variant markers stripped from the id.
+
+    So 'qwen3.5:9b' and 'qwen3.5:9b-mlx' compare equal (a runtime swap), and
+    'llama3.1:8b-q8_0' and 'llama3.1:8b-q4_K_M' compare equal (a quant swap), while
+    genuinely different models ('qwen3.5:9b' vs 'qwen3.5:32b') stay distinct. The
+    first hyphen token (the base name:tag) is never stripped; only trailing tokens
+    that are known runtime markers, look like a quant tag, or equal the lockfile's
+    own quant/runtime field are dropped."""
+    tokens = model.strip().lower().split("-")
+    fields = {f.strip().lower() for f in (quant, runtime) if f.strip()}
+    core = tokens[:1]
+    for tok in tokens[1:]:
+        if tok in _RUNTIME_MARKERS or _QUANT_MARKER.match(tok) or tok in fields:
+            continue
+        core.append(tok)
+    return "-".join(core)
 
 
 @dataclass(frozen=True)

@@ -329,6 +329,34 @@ The full pipeline is validated against real agent traffic on real local models �
 including a runtime swap the gate catches and real frozen-mistake probes the review
 step rejects — in [`VALIDATION-TRACES.md`](VALIDATION-TRACES.md).
 
+## Trends across a ladder
+
+`diff` compares two lockfiles; `trend` compares N, in the order you give them — a
+quantization ladder or the same model over time — so you can see *where* a capability
+holds and *where* it cliffs:
+
+```bash
+uv run probelock trend Q8_0.lock Q6_K.lock Q5_K_M.lock Q4_K_M.lock Q3_K_M.lock Q2_K.lock
+```
+
+```
+Capability          Q8_0   Q6_K   Q5_K_M   Q4_K_M   Q3_K_M   Q2_K       Δ   Trend
+structured_output   1.00   1.00     1.00     0.67     0.33   0.33   -0.67   ↓ regressed
+tool_restraint      1.00   1.00     1.00     1.00     1.00   1.00   +0.00   = stable
+tool_selection      1.00   1.00     0.67     1.00     0.67   1.00   +0.00   ~ unstable
+```
+
+Each row is annotated by its whole-ladder behavior: `regressed` (net drop past
+`--max-drop`), `improved`, `unstable` (net-flat but it dipped along the way — a signal a
+two-point diff of the endpoints would miss), `stable`, `removed` (present early but gone
+from the last rung — a dropped capability, counted as a regression), or `partial`
+(present in fewer than two lockfiles). `--format markdown|json|html` mirror `diff`; the
+HTML view draws a sparkline per capability. `trend` never fails on a regression (use
+`gate` pairwise for CI); it exits non-zero only on bad input.
+
+The filename stem is each column's header, so name your lockfiles for the axis
+(`Q8_0.lock`, `Q4_K_M.lock`).
+
 ## Sampling & noisy gates
 
 With one sample per probe, a capability backed by 3 tools quantizes to
@@ -384,7 +412,6 @@ probelock diff probelock.lock candidate.lock --format markdown >> "$GITHUB_STEP_
 - More `ingest` adapters (Anthropic logs, OTel GenAI spans) and an opt-in
   `--cluster embeddings` mode beside the default dependency-free dedup.
 - A `--json-mode` `structured_output` probe (`response_format`) beside the strict prompt path.
-- Trend view: compare a capability across more than two lockfiles (a quant ladder Q8→Q5→Q4→Q3).
 - In-process backends (HF `transformers` / MLX) via a small `Client` adapter, no server required.
 - Emit OpenTelemetry spans from `probe` runs, so a probe run shows up alongside your other
   agent traces in whatever backend you already use — a follow-on to trace-derived probes
