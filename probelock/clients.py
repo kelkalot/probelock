@@ -118,8 +118,11 @@ class _EndpointClient:
         return None
 
     def _cache_key(self, probe: Probe) -> str:
+        # response_format is part of the request: a json_mode probe and a strict-prompt
+        # probe can share messages yet must not share a cached response.
         return json.dumps(
-            [self.model, probe.messages, probe.tools], sort_keys=True, separators=(",", ":")
+            [self.model, probe.messages, probe.tools, probe.response_format],
+            sort_keys=True, separators=(",", ":"),
         )
 
     def complete(self, probe: Probe) -> ResponseMessage:
@@ -175,6 +178,8 @@ class HttpClient(_EndpointClient):
         if probe.tools:
             body["tools"] = probe.tools
             body["tool_choice"] = "auto"
+        if probe.response_format:
+            body["response_format"] = probe.response_format
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -349,7 +354,7 @@ class SimulatedClient:
             # so the probe deterministically scores 0 (guaranteed-failing response).
             return ResponseMessage(content="(declined to call a tool)")
 
-        if cap == "structured_output":
+        if cap in ("structured_output", "json_mode"):
             if passing:
                 return ResponseMessage(content=json.dumps(valid_args))
             return ResponseMessage(
@@ -446,6 +451,8 @@ class _SdkClient(_EndpointClient):
         if probe.tools:
             kwargs["tools"] = probe.tools
             kwargs["tool_choice"] = "auto"
+        if probe.response_format:
+            kwargs["response_format"] = probe.response_format
         if self._api_key:
             kwargs["api_key"] = self._api_key
         try:

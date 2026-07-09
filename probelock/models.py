@@ -27,6 +27,10 @@ class Probe:
     expected_tool: Optional[str] = None
     schema: Optional[Dict[str, Any]] = None
     expected_text: Optional[str] = None
+    # OpenAI `response_format` for this probe, if any — the native structured-output API
+    # path (json_mode capability). None for every schema/prompt-based probe. Real
+    # clients forward it verbatim; the simulator ignores it (it crafts by capability).
+    response_format: Optional[Dict[str, Any]] = None
     # Simulator-only reference (the scorer never reads this): how a *correct*
     # answer looks, so the SimulatedClient can craft pass/fail responses.
     reference: Dict[str, Any] = field(default_factory=dict)

@@ -767,3 +767,65 @@ def test_gate_require_same_model_still_blocks_true_cross_model(tmp_path):
     _write_lock_rt(c, "mistral:7b", "ollama", {"tool_selection": 1.0})
     result = runner.invoke(app, ["gate", "-b", str(b), "-c", str(c), "--require-same-model"])
     assert result.exit_code == 2, result.output
+
+
+# --- --json-mode flag ---------------------------------------------------------------
+
+_ANTHROPIC_LOG = _ROOT / "fixtures" / "sample_anthropic_log.jsonl"
+_OTEL_SPANS = _ROOT / "fixtures" / "sample_otel_spans.json"
+
+
+def test_probe_json_mode_flag_adds_the_capability(tmp_path):
+    prof = tmp_path / "p.json"
+    prof.write_text(json.dumps({"label": "s", "model": "s",
+                                "capabilities": {"json_mode": 1.0}}))
+    lock = tmp_path / "jm.lock"
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--json-mode", "--simulate", str(prof),
+        "-o", str(lock)])
+    assert result.exit_code == 0, result.output
+    assert "json_mode" in json.loads(lock.read_text())["capabilities"]
+
+
+def test_derive_without_json_mode_omits_it():
+    result = runner.invoke(app, ["derive", "--tools", str(TOOLS_PATH)])
+    assert result.exit_code == 0, result.output
+    assert "json_mode::" not in result.output
+
+
+# --- new ingest adapters via the CLI ------------------------------------------------
+
+
+def test_ingest_anthropic_log(tmp_path):
+    out = tmp_path / "mined.json"
+    result = runner.invoke(app, ["ingest", str(_ANTHROPIC_LOG), "--out", str(out),
+                                 "--format", "anthropic-jsonl"])
+    assert result.exit_code == 0, result.output
+    cats = [p["category"] for p in json.loads(out.read_text())["probes"]]
+    assert "tool_selection" in cats
+
+
+def test_ingest_otel_spans_autodetected(tmp_path):
+    out = tmp_path / "mined.json"
+    result = runner.invoke(app, ["ingest", str(_OTEL_SPANS), "--out", str(out)])  # auto
+    assert result.exit_code == 0, result.output
+    assert "no_genai_attrs" in result.output or "failed_status" in result.output  # skips reported
+    assert json.loads(out.read_text())["probes"]
+
+
+# --- --cluster embeddings validation + caveat ---------------------------------------
+
+
+def test_ingest_cluster_embeddings_requires_endpoint(tmp_path):
+    out = tmp_path / "m.json"
+    result = runner.invoke(app, ["ingest", str(_AGENT_LOG), "--out", str(out),
+                                 "--cluster", "embeddings"])
+    assert result.exit_code == 2, result.output
+    assert "embed-endpoint" in result.output
+
+
+def test_ingest_unknown_cluster_mode_exits_2(tmp_path):
+    out = tmp_path / "m.json"
+    result = runner.invoke(app, ["ingest", str(_AGENT_LOG), "--out", str(out),
+                                 "--cluster", "magic"])
+    assert result.exit_code == 2, result.output

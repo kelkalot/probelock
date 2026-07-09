@@ -204,6 +204,9 @@ SCORERS = {
     "arg_validity": score_arg_validity,
     "required_args": score_required_args,
     "structured_output": score_structured_output,
+    # json_mode replays the native response_format path but the SUCCESS test is
+    # identical to structured_output: content must be JSON valid against the schema.
+    "json_mode": score_structured_output,
     "format_adherence": score_format_adherence,
     "tool_restraint": score_tool_restraint,
     "tool_permission": score_tool_permission,

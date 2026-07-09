@@ -163,3 +163,15 @@ def test_fingerprint_is_order_invariant():
     # Reordering the tools file must not change the fingerprint, because the
     # derived probe battery is identical (derive_probes sorts by name).
     assert tools_fingerprint(TOOLS) == tools_fingerprint(list(reversed(TOOLS)))
+
+
+def test_json_mode_probes_are_opt_in():
+    without = [p for p in derive_probes(TOOLS) if p.capability == "json_mode"]
+    assert without == []  # off by default
+    with_jm = [p for p in derive_probes(TOOLS, json_mode=True) if p.capability == "json_mode"]
+    assert len(with_jm) == len(TOOLS)
+    p = with_jm[0]
+    assert p.tools == []  # no tools offered; native structured-output path
+    assert p.response_format["type"] == "json_schema"
+    assert p.response_format["json_schema"]["schema"] == p.schema
+    assert p.id.startswith("json_mode::")

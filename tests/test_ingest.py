@@ -577,3 +577,268 @@ def test_no_tool_sampling_cap_is_per_toolset(tmp_path):
         batch("Who wrote Hamlet?", [SEARCH_TOOL])
     probes, _ = _mine(tmp_path, records, per_capability=1)
     assert len([p for p in probes if p.category == "no_tool"]) == 2  # one per toolset
+
+
+# --- anthropic-jsonl adapter ---------------------------------------------------------
+
+ANTHROPIC_LOG = ROOT / "fixtures" / "sample_anthropic_log.jsonl"
+
+
+def test_anthropic_adapter_translates_to_canonical_shape():
+    exchanges, summary = load_exchanges(ANTHROPIC_LOG, "auto")  # auto-detected
+    assert summary.skipped == {}
+    first = exchanges[0]
+    # tool_use block -> OpenAI tool_call; input_schema -> function.parameters
+    assert first.response.tool_calls[0].name == "get_weather"
+    assert first.tools[0]["function"]["name"] == "get_weather"
+    assert "properties" in first.tools[0]["function"]["parameters"]
+
+
+def test_anthropic_tool_result_block_becomes_a_tool_message(tmp_path):
+    log = tmp_path / "a.jsonl"
+    rec = {
+        "request": {
+            "model": "claude-3-5-sonnet",
+            "system": "You are helpful.",
+            "messages": [
+                {"role": "user", "content": "search the report"},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "tu1", "name": "search",
+                     "input": {"q": "report"}}]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "tu1", "content": "found it"}]},
+            ],
+            "tools": [{"name": "search", "description": "s",
+                       "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}}}],
+        },
+        "response": {"type": "message", "role": "assistant",
+                     "content": [{"type": "text", "text": "Done."}]},
+    }
+    log.write_text(json.dumps(rec) + "\n")
+    ex = load_exchanges(log, "anthropic-jsonl")[0][0]
+    roles = [m["role"] for m in ex.messages]
+    assert roles[0] == "system"                       # top-level system -> leading message
+    assert "tool" in roles                            # tool_result -> tool message
+    tool_msg = next(m for m in ex.messages if m["role"] == "tool")
+    assert tool_msg["tool_call_id"] == "tu1" and tool_msg["content"] == "found it"
+
+
+def test_anthropic_forced_tool_choice_marked_non_auto(tmp_path):
+    log = tmp_path / "a.jsonl"
+    rec = {"request": {"model": "c", "messages": [{"role": "user", "content": "hi"}],
+                       "tool_choice": {"type": "tool", "name": "x"}},
+           "response": {"type": "message", "role": "assistant",
+                        "content": [{"type": "text", "text": "hello"}]}}
+    log.write_text(json.dumps(rec) + "\n")
+    ex = load_exchanges(log, "anthropic-jsonl")[0][0]
+    assert ex.tool_choice == "required"  # not "auto" -> mining will skip it
+
+
+def test_anthropic_log_mines_via_continuation(tmp_path):
+    probes, _ = ingest_file(ANTHROPIC_LOG, "auto", MiningConfig())
+    selection = [p for p in probes if p.category == "tool_selection"]
+    assert len(selection) == 1 and selection[0].tool == "get_weather"
+
+
+# --- otel-genai adapter --------------------------------------------------------------
+
+OTEL_SPANS = ROOT / "fixtures" / "sample_otel_spans.json"
+
+
+def test_otel_adapter_reads_blob_and_indexed_forms_and_skips_others():
+    exchanges, summary = load_exchanges(OTEL_SPANS, "auto")  # auto-detected as a doc
+    assert summary.skipped == {"failed_status": 1, "no_genai_attrs": 1}
+    # blob-form gen_ai.prompt/completion -> a tool call; indexed form -> a text answer
+    kinds = sorted((e.response.tool_calls[0].name if e.response.tool_calls else "(text)")
+                   for e in exchanges)
+    assert kinds == ["(text)", "get_weather", "get_weather"]
+    assert all(e.session_id and e.session_id.startswith("t") for e in exchanges)  # traceId
+
+
+def test_otel_span_attributes_accept_flat_dict(tmp_path):
+    doc = {"resourceSpans": [{"scopeSpans": [{"spans": [{
+        "traceId": "x", "name": "chat",
+        "attributes": {  # flat-dict attribute form, not the OTLP list form
+            "gen_ai.request.model": "m",
+            "gen_ai.prompt": json.dumps([{"role": "user", "content": "hi"}]),
+            "gen_ai.completion": json.dumps([{"role": "assistant", "content": "hello"}]),
+        }}]}]}]}
+    f = tmp_path / "o.json"
+    f.write_text(json.dumps(doc))
+    ex = load_exchanges(f, "otel-genai")[0][0]
+    assert ex.model == "m" and ex.response.content == "hello"
+
+
+def test_otel_bare_span_list_is_accepted(tmp_path):
+    spans = [{"traceId": "t", "name": "chat", "attributes": [
+        {"key": "gen_ai.prompt", "value": {"stringValue": json.dumps(
+            [{"role": "user", "content": "q"}])}},
+        {"key": "gen_ai.completion", "value": {"stringValue": json.dumps(
+            [{"role": "assistant", "content": "a"}])}}]}]
+    f = tmp_path / "o.json"
+    f.write_text(json.dumps(spans))
+    exchanges, _ = load_exchanges(f, "otel-genai")
+    assert len(exchanges) == 1
+
+
+def test_otel_all_non_genai_spans_raises(tmp_path):
+    doc = {"resourceSpans": [{"scopeSpans": [{"spans": [
+        {"name": "http", "attributes": [{"key": "http.method", "value": {"stringValue": "GET"}}]}]}]}]}
+    f = tmp_path / "o.json"
+    f.write_text(json.dumps(doc))
+    with pytest.raises(ValueError):
+        load_exchanges(f, "otel-genai")
+
+
+# --- embeddings clustering -----------------------------------------------------------
+
+
+def test_cluster_config_validation(tmp_path):
+    records = [_rec([{"role": "user", "content": "hi"}],
+                    _call_message("get_weather", {"city": "x"}))]
+    with pytest.raises(ValueError):  # embeddings needs an endpoint+model
+        _mine(tmp_path, records, cluster="embeddings")
+    with pytest.raises(ValueError):  # unknown cluster mode
+        _mine(tmp_path, records, cluster="magic")
+
+
+def test_cluster_embeddings_falls_back_to_hash_when_endpoint_down(tmp_path):
+    # unreachable endpoint -> warn + exact-hash clustering, never a crash
+    records = [dict(_rec([{"role": "user", "content": "weather?"}],
+                         _call_message("get_weather", {"city": "Oslo"})), session_id=f"s{i}")
+               for i in range(2)]
+    probes, _ = _mine(tmp_path, records, cluster="embeddings",
+                      embed_endpoint="http://127.0.0.1:9/v1", embed_model="none")
+    # falls back to hash: identical contexts still cluster and mine
+    assert [p for p in probes if p.category == "schema_validity"]
+
+
+def test_otel_indexed_tool_calls_are_reassembled(tmp_path):
+    # OpenLLMetry emits tool calls as further-indexed sub-attributes, NOT a JSON blob.
+    # Two sessions agreeing -> a real tool_selection probe must be mined.
+    def span(trace):
+        return {"traceId": trace, "name": "chat", "attributes": [
+            {"key": "gen_ai.request.tools", "value": {"stringValue": json.dumps([{
+                "type": "function", "function": {"name": "get_weather", "description": "w",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}},
+                               "required": ["city"]}}}])}},
+            {"key": "gen_ai.prompt.0.role", "value": {"stringValue": "user"}},
+            {"key": "gen_ai.prompt.0.content", "value": {"stringValue": "weather in Oslo?"}},
+            {"key": "gen_ai.completion.0.role", "value": {"stringValue": "assistant"}},
+            {"key": "gen_ai.completion.0.tool_calls.0.name", "value": {"stringValue": "get_weather"}},
+            {"key": "gen_ai.completion.0.tool_calls.0.arguments",
+             "value": {"stringValue": '{"city": "Oslo"}'}},
+            {"key": "gen_ai.completion.0.tool_calls.0.id", "value": {"stringValue": "call_1"}},
+        ]}
+    doc = {"resourceSpans": [{"scopeSpans": [{"spans": [span("t1"), span("t2")]}]}]}
+    f = tmp_path / "o.json"
+    f.write_text(json.dumps(doc))
+    exchanges, _ = load_exchanges(f, "otel-genai")
+    assert exchanges[0].response.tool_calls[0].name == "get_weather"  # not dropped
+    assert json.loads(exchanges[0].response.tool_calls[0].arguments) == {"city": "Oslo"}
+    probes, _ = ingest_file(f, "otel-genai", MiningConfig(min_agreement=2))
+    assert any(p.category == "tool_selection" and p.tool == "get_weather" for p in probes)
+
+
+def test_otel_indexed_prompt_tool_calls_replay_as_canonical_shape(tmp_path):
+    # A historical assistant tool-call turn in the PROMPT must reconstruct canonical
+    # tool_calls, not junk "tool_calls.0.name" keys, or the frozen context won't replay.
+    from probelock.ingest import _otel_indexed_messages
+    attrs = {
+        "gen_ai.prompt.0.role": "user",
+        "gen_ai.prompt.0.content": "book it",
+        "gen_ai.prompt.1.role": "assistant",
+        "gen_ai.prompt.1.tool_calls.0.name": "create_event",
+        "gen_ai.prompt.1.tool_calls.0.arguments": '{"title": "x"}',
+    }
+    msgs = _otel_indexed_messages(attrs, "gen_ai.prompt")
+    assistant = msgs[1]
+    assert "tool_calls.0.name" not in assistant  # no junk keys
+    assert assistant["tool_calls"][0]["function"]["name"] == "create_event"
+
+
+def test_auto_detect_does_not_misroute_single_record_jsonl_with_name_key(tmp_path):
+    # A one-record log whose object has a top-level "name" must NOT be mistaken for an
+    # OTel bare span under --format auto (it lacks spanId/traceId).
+    log = tmp_path / "one.jsonl"
+    rec = {"name": "entry-42", "request": {"messages": [{"role": "user", "content": "hi"}]},
+           "response": {"choices": [{"message": _call_message("get_weather", {"city": "Oslo"})}]}}
+    log.write_text(json.dumps(rec) + "\n")
+    exchanges, summary = load_exchanges(log, "auto")  # must not raise / misroute
+    assert len(exchanges) == 1
+    assert exchanges[0].response.tool_calls[0].name == "get_weather"
+
+
+def test_otel_indexed_tool_definitions_are_read(tmp_path):
+    # OpenLLMetry emits tool DEFINITIONS in indexed form too. Without reading them the
+    # reassembled indexed tool CALL names an un-offered tool and mines nothing.
+    def span(trace):
+        return {"traceId": trace, "name": "chat", "attributes": [
+            {"key": "gen_ai.request.functions.0.name", "value": {"stringValue": "get_weather"}},
+            {"key": "gen_ai.request.functions.0.description", "value": {"stringValue": "w"}},
+            {"key": "gen_ai.request.functions.0.parameters", "value": {"stringValue": json.dumps(
+                {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]})}},
+            {"key": "gen_ai.prompt.0.role", "value": {"stringValue": "user"}},
+            {"key": "gen_ai.prompt.0.content", "value": {"stringValue": "weather in Oslo?"}},
+            {"key": "gen_ai.completion.0.role", "value": {"stringValue": "assistant"}},
+            {"key": "gen_ai.completion.0.tool_calls.0.name", "value": {"stringValue": "get_weather"}},
+            {"key": "gen_ai.completion.0.tool_calls.0.arguments",
+             "value": {"stringValue": '{"city": "Oslo"}'}},
+        ]}
+    doc = {"resourceSpans": [{"scopeSpans": [{"spans": [span("t1"), span("t2")]}]}]}
+    f = tmp_path / "o.json"
+    f.write_text(json.dumps(doc))
+    exchanges, _ = load_exchanges(f, "otel-genai")
+    assert exchanges[0].tools[0]["function"]["name"] == "get_weather"  # definition read
+    probes, summary = ingest_file(f, "otel-genai", MiningConfig(min_agreement=2))
+    assert any(p.category == "tool_selection" for p in probes)  # now mineable
+    assert "called_tool_not_offered" not in summary.skipped
+
+
+def test_anthropic_is_error_tool_result_blocks_confirmation(tmp_path):
+    # A failed Anthropic tool call (is_error:true) with benign-looking content must NOT
+    # be confirmed-good: freezing a wrong tool choice as expected would punish fixes.
+    log = tmp_path / "a.jsonl"
+    tools = [{"name": "get_weather", "description": "w",
+              "input_schema": {"type": "object", "properties": {"city": {"type": "string"}},
+                               "required": ["city"]}},
+             {"name": "search_files", "description": "s",
+              "input_schema": {"type": "object", "properties": {"q": {"type": "string"}},
+                               "required": ["q"]}}]
+    first = {"request": {"model": "c", "tools": tools,
+                         "messages": [{"role": "user", "content": "What's the weather in Oslo?"}]},
+             "response": {"type": "message", "role": "assistant", "content": [
+                 {"type": "tool_use", "id": "tu1", "name": "search_files", "input": {"q": "Oslo"}}]},
+             "session_id": "s1"}
+    second = {"request": {"model": "c", "tools": tools, "messages": [
+                {"role": "user", "content": "What's the weather in Oslo?"},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "tu1", "name": "search_files", "input": {"q": "Oslo"}}]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "tu1",
+                     "content": "No matching files in the workspace.", "is_error": True}]}]},
+              "response": {"type": "message", "role": "assistant",
+                           "content": [{"type": "text", "text": "I could not find that."}]},
+              "session_id": "s1"}
+    log.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
+    probes, _ = ingest_file(log, "anthropic-jsonl", MiningConfig())
+    # the errored call must not become a continuation-confirmed tool_selection
+    assert [p for p in probes if p.category == "tool_selection"] == []
+    assert [p for p in probes if p.category == "schema_validity"]  # still schema-eligible
+
+
+def test_embeddings_malformed_200_falls_back_to_hash(tmp_path, monkeypatch):
+    # A 200 body that is not the OpenAI shape (bare array, raw-vector rows) must degrade
+    # to deterministic hash clustering, never crash the run.
+    import probelock.ingest as ing
+
+    def bad_embed(texts, config):
+        raise AttributeError("'list' object has no attribute 'get'")  # simulate the crash
+
+    monkeypatch.setattr(ing, "_embed", bad_embed)
+    records = [dict(_rec([{"role": "user", "content": "weather?"}],
+                         _call_message("get_weather", {"city": "Oslo"})), session_id=f"s{i}")
+               for i in range(2)]
+    probes, _ = _mine(tmp_path, records, cluster="embeddings",
+                      embed_endpoint="http://127.0.0.1:9/v1", embed_model="m")
+    assert [p for p in probes if p.category == "schema_validity"]  # fell back, still mined

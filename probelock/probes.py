@@ -227,8 +227,14 @@ def _load_restraint_probes() -> List[Dict[str, Any]]:
     return json.loads(_RESTRAINT_PROBES_FILE.read_text())
 
 
-def derive_probes(tools: List[Dict[str, Any]]) -> List[Probe]:
-    """Generate the full probe battery from a list of OpenAI-style tools."""
+def derive_probes(tools: List[Dict[str, Any]], json_mode: bool = False) -> List[Probe]:
+    """Generate the full probe battery from a list of OpenAI-style tools.
+
+    ``json_mode`` adds a ``json_mode`` probe per tool that exercises the server's native
+    structured-output API (``response_format``) instead of the strict-prompt path — off
+    by default because ``response_format`` is not universally supported (a server that
+    rejects it yields a per-probe API error, itself a signal, but not one you want in the
+    battery unless you opted in)."""
     names = [t["function"]["name"] for t in tools]
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:
@@ -380,6 +386,29 @@ def derive_probes(tools: List[Dict[str, Any]]) -> List[Probe]:
                 reference={"valid_args": valid},
             )
         )
+
+        if json_mode:
+            probes.append(
+                Probe(
+                    id=f"json_mode::{name}",
+                    capability="json_mode",
+                    description=f"Emits schema-valid JSON for {name} via response_format",
+                    messages=[{
+                        "role": "user",
+                        "content": f"Produce a JSON object for the '{name}' operation.",
+                    }],
+                    tools=[],
+                    expected_tool=None,
+                    schema=schema,
+                    # Native structured-output path: the schema is enforced by the API,
+                    # not by the prompt. Scored by the same score_structured_output.
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {"name": name, "schema": schema},
+                    },
+                    reference={"valid_args": valid},
+                )
+            )
 
     # Negative probes: a benign task that needs NO tool. The full toolset is
     # offered so the model *could* over-trigger; the right answer is to not call.
