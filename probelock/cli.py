@@ -65,6 +65,12 @@ _MINED_OPTION = typer.Option(
     "accepted (reviewed) probes join the battery."
 )
 
+_JSON_MODE_OPTION = typer.Option(
+    False, "--json-mode", help="Also add a json_mode probe per tool that uses the "
+    "server's native response_format API (beside the strict-prompt structured_output). "
+    "Off by default: not every endpoint supports response_format."
+)
+
 
 def _bar(score: float) -> str:
     filled = round(score * _BAR)
@@ -178,10 +184,11 @@ def derive(
     tools: Optional[Path] = _TOOLS_OPTION,
     traces: Optional[Path] = _TRACES_OPTION,
     mined: Optional[Path] = _MINED_OPTION,
+    json_mode: bool = _JSON_MODE_OPTION,
 ) -> None:
     """Show the probe battery that would be generated from a toolset (transparency)."""
     _require_probe_source(tools, traces, mined)
-    probes = derive_probes(_load_tools_or_exit(tools)) if tools is not None else []
+    probes = derive_probes(_load_tools_or_exit(tools), json_mode=json_mode) if tools is not None else []
     if traces is not None:
         probes = probes + derive_traced_probes(_load_traces_or_exit(traces))
     if mined is not None:
@@ -223,6 +230,7 @@ def probe(
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Write the lockfile here."),
     traces: Optional[Path] = _TRACES_OPTION,
     mined: Optional[Path] = _MINED_OPTION,
+    json_mode: bool = _JSON_MODE_OPTION,
     allow_sensitive: bool = typer.Option(
         False, "--allow-sensitive", help="Let sensitive mined probes (verbatim real "
         "conversation content) into a written lockfile run."
@@ -232,7 +240,7 @@ def probe(
     _require_probe_source(tools, traces, mined)
     if tools is not None:
         tool_list = _load_tools_or_exit(tools)
-        probes = derive_probes(tool_list)
+        probes = derive_probes(tool_list, json_mode=json_mode)
         fingerprint = tools_fingerprint(tool_list)
     else:
         # Trace-only run: traced/mined probes replay their own embedded tool
@@ -384,7 +392,25 @@ def ingest(
         "your own request/response logging)."
     ),
     out: Path = typer.Option(..., "--out", "-o", help="Write the mined probes file here."),
-    fmt: str = typer.Option("auto", "--format", help="auto | trace-v1 | openai-jsonl"),
+    fmt: str = typer.Option(
+        "auto", "--format",
+        help="auto | trace-v1 | openai-jsonl | anthropic-jsonl | otel-genai"
+    ),
+    cluster: str = typer.Option(
+        "hash", "--cluster", help="Dedup mode: hash (default, deterministic) | embeddings "
+        "(group near-duplicate contexts by cosine similarity — needs --embed-endpoint, "
+        "NOT deterministic)."
+    ),
+    embed_endpoint: str = typer.Option(
+        "", "--embed-endpoint", help="OpenAI-compatible base URL for --cluster embeddings "
+        "(e.g. http://localhost:11434/v1)."
+    ),
+    embed_model: str = typer.Option(
+        "", "--embed-model", help="Embedding model for --cluster embeddings (e.g. nomic-embed-text)."
+    ),
+    cluster_threshold: float = typer.Option(
+        0.92, "--cluster-threshold", help="Cosine similarity to merge contexts under --cluster embeddings."
+    ),
     min_agreement: int = typer.Option(
         2, "--min-agreement", help="Distinct sessions that must agree to confirm a "
         "tool-selection probe when no continuation evidence exists."
@@ -413,6 +439,12 @@ def ingest(
     if fmt not in FORMATS:
         _err(f"Unknown --format '{fmt}' (use {' | '.join(FORMATS)}).")
         raise typer.Exit(2)
+    if cluster not in ("hash", "embeddings"):
+        _err(f"Unknown --cluster '{cluster}' (use hash | embeddings).")
+        raise typer.Exit(2)
+    if cluster == "embeddings" and not (embed_endpoint and embed_model):
+        _err("--cluster embeddings requires --embed-endpoint and --embed-model.")
+        raise typer.Exit(2)
     patterns = tuple(p.strip().lower() for p in redact_patterns.split(",") if p.strip())
     for name in patterns:
         if name not in REDACT_PATTERNS:
@@ -420,6 +452,14 @@ def ingest(
                 f"Unknown redact pattern '{name}' (use {', '.join(sorted(REDACT_PATTERNS))})."
             )
             raise typer.Exit(2)
+    if cluster == "embeddings":
+        err_console.print(
+            "[yellow]--cluster embeddings groups near-duplicate contexts using an "
+            "embedding model — the dedup result is NOT deterministic (it depends on the "
+            "model and version). The mined probes and scoring stay deterministic; only "
+            "which contexts merged does not. Each affected probe's provenance records "
+            "cluster=embeddings.[/]"
+        )
 
     config = MiningConfig(
         min_agreement=min_agreement,
@@ -427,6 +467,10 @@ def ingest(
         per_capability=per_capability,
         max_context_tokens=max_context_tokens,
         redact_patterns=patterns,
+        cluster=cluster,
+        embed_endpoint=embed_endpoint,
+        embed_model=embed_model,
+        cluster_threshold=cluster_threshold,
     )
     try:
         probes, summary = ingest_files(logs, fmt, config)

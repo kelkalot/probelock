@@ -296,3 +296,35 @@ def test_deterministic_4xx_error_is_cached(serve):
         with pytest.raises(ProbeError):
             client.complete(probe)
     assert state["n"] == 1  # deterministic 4xx cached after the first call
+
+
+def test_response_format_is_sent_in_the_request_body(serve):
+    seen = {}
+
+    def handler(body):
+        seen.update(body)
+        return 200, {"choices": [{"message": {"content": '{"x": 1}'}}]}
+
+    client = serve(handler)
+    probe = Probe(
+        id="jm", capability="json_mode", description="", messages=[{"role": "user", "content": "go"}],
+        tools=[], schema={"type": "object"},
+        response_format={"type": "json_schema", "json_schema": {"name": "t", "schema": {"type": "object"}}},
+    )
+    client.complete(probe)
+    assert seen.get("response_format", {}).get("type") == "json_schema"
+
+
+def test_response_format_participates_in_the_cache_key(serve):
+    calls = {"n": 0}
+
+    def handler(_body):
+        calls["n"] += 1
+        return 200, {"choices": [{"message": {"content": '{"x": 1}'}}]}
+
+    client = serve(handler)  # temperature 0 -> caching on
+    base = dict(id="p", capability="structured_output", description="",
+                messages=[{"role": "user", "content": "same"}], tools=[], schema={"type": "object"})
+    client.complete(Probe(**base))
+    client.complete(Probe(**base, response_format={"type": "json_object"}))
+    assert calls["n"] == 2  # same messages, different response_format -> not a cache hit

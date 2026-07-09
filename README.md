@@ -159,6 +159,7 @@ The 1.2B model matches `qwen3.5:9b` on tool selection, discrimination,
 | `required_args`       | All required args present and non-empty                   | key presence |
 | `arity_robustness`    | Fills **every** parameter (required + optional) when asked | all-present |
 | `structured_output`   | Emits schema-valid JSON on demand (no tools, no fences)   | parse + `jsonschema` |
+| `json_mode` *(opt-in, `--json-mode`)* | Same, but via the server's native `response_format` API instead of a prompt | parse + `jsonschema` |
 | `tool_restraint`      | Does **not** call a tool for a task that needs none (over-trigger) | no tool call |
 | `tool_permission`     | Does **not** call a tool it was explicitly forbidden to use | forbidden tool absent |
 | `no_hallucinated_tool`| Does **not** fabricate a call to a tool that was not offered | called ⊆ offered |
@@ -294,11 +295,27 @@ probelock probe --tools tools.json --mined probes/mined.json \
 pass a rotated set together so sessions spanning a rotation boundary keep their
 confirmation evidence.
 
-Two input shapes are auto-detected: the native `trace-v1` record (one JSON object per
-line with `request`/`response.message`, what a recording proxy writes) and `openai-jsonl`
-(the verbatim chat-completions request body next to the verbatim response object). See
-[`fixtures/sample_agent_log.jsonl`](fixtures/sample_agent_log.jsonl) and
-[`fixtures/sample_openai_log.jsonl`](fixtures/sample_openai_log.jsonl).
+Several input formats are supported (`--format`, or `auto`):
+
+| `--format` | Shape |
+|---|---|
+| `trace-v1` | the native record the recording proxy writes (one JSON object per line, `request`/`response.message`) |
+| `openai-jsonl` | the verbatim chat-completions request body next to the verbatim response, per line |
+| `anthropic-jsonl` | logged Anthropic Messages API calls (`request`/`response`); content blocks, `tool_use`/`tool_result`, and `system` are translated to the canonical shape |
+| `otel-genai` | an OTLP-JSON span export, read via the OpenTelemetry **GenAI semantic-convention** attributes (`gen_ai.prompt`/`gen_ai.completion`, blob or indexed form) — scoped to the spec, not any one library's layout; spans without those attributes are skipped and counted |
+
+`auto` detects the JSONL shapes and OTel documents. See the `fixtures/sample_*` files for
+each. For OTel exporters that do not follow the semantic convention,
+[`examples/otel_traces_to_probelock.py`](examples/otel_traces_to_probelock.py) remains the
+conversion recipe.
+
+Deduplication is exact-hash by default (deterministic). `--cluster embeddings
+--embed-endpoint URL --embed-model NAME` instead groups *near-duplicate* contexts by
+embedding cosine similarity (via an OpenAI-compatible `/v1/embeddings` endpoint you
+already run). This is opt-in and **not deterministic** — the grouping depends on the
+embedding model and version, so probelock prints a caveat and records `cluster:
+embeddings` in each affected probe's provenance. Everything downstream (scoring, gating)
+stays deterministic; only which contexts merged does not.
 
 Raw traffic includes model mistakes, so **provenance determines trust** — every probe
 records how many sessions support it and which rule confirmed it, and that decides how
@@ -409,9 +426,6 @@ probelock diff probelock.lock candidate.lock --format markdown >> "$GITHUB_STEP_
 
 - Proxy hardening: a static Go/Rust binary beside the reference Python implementation,
   and streaming-reassembly edge cases (multi-line SSE events, resume-after-disconnect).
-- More `ingest` adapters (Anthropic logs, OTel GenAI spans) and an opt-in
-  `--cluster embeddings` mode beside the default dependency-free dedup.
-- A `--json-mode` `structured_output` probe (`response_format`) beside the strict prompt path.
 - In-process backends (HF `transformers` / MLX) via a small `Client` adapter, no server required.
 - Emit OpenTelemetry spans from `probe` runs, so a probe run shows up alongside your other
   agent traces in whatever backend you already use — a follow-on to trace-derived probes

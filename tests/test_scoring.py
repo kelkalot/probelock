@@ -264,3 +264,12 @@ def test_traced_no_tool_is_a_negative_capability():
     assert "traced_no_tool" in scoring.NEGATIVE_CAPABILITIES
     assert "traced_tool_selection" not in scoring.NEGATIVE_CAPABILITIES
     assert "traced_schema_validity" not in scoring.NEGATIVE_CAPABILITIES
+
+
+def test_json_mode_uses_the_structured_output_scorer():
+    assert scoring.SCORERS["json_mode"] is scoring.SCORERS["structured_output"]
+    p = Probe(id="json_mode::t", capability="json_mode", description="", messages=[],
+              tools=[], schema=SCHEMA)
+    ok = ResponseMessage(content=json.dumps({"title": "x", "start": "t"}))
+    assert scoring.score(p, ok) == 1.0
+    assert scoring.score(p, ResponseMessage(content="not json")) == 0.0

@@ -1,0 +1,153 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "t1",
+              "name": "chat",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "qwen2.5"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"content\": \"weather in Bergen?\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "stringValue": "[{\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"c1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Bergen\\\"}\"}}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.tools",
+                  "value": {
+                    "stringValue": "[{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get weather\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}}}]"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "t2",
+              "name": "chat",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "qwen2.5"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"content\": \"weather in Bergen?\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "stringValue": "[{\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"c1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Bergen\\\"}\"}}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.tools",
+                  "value": {
+                    "stringValue": "[{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get weather\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}}}]"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "t3",
+              "name": "chat",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "qwen2.5"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt.0.role",
+                  "value": {
+                    "stringValue": "user"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt.0.content",
+                  "value": {
+                    "stringValue": "What is 2+2?"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion.0.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion.0.content",
+                  "value": {
+                    "stringValue": "4"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "t4",
+              "name": "chat",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "qwen2.5"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"content\": \"weather?\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "stringValue": "[{\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"c1\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Bergen\\\"}\"}}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.tools",
+                  "value": {
+                    "stringValue": "[{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get weather\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}}}]"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "t5",
+              "name": "http.request",
+              "attributes": [
+                {
+                  "key": "http.method",
+                  "value": {
+                    "stringValue": "GET"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
