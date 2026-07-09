@@ -3,11 +3,14 @@ name: release
 # Publish to PyPI via Trusted Publishing (OIDC) — no API tokens stored.
 # One-time setup on PyPI: add a "pending publisher" for project `probelock`
 # (owner: kelkalot, repository: probelock, workflow: release.yml).
-# Then push a tag like `v0.1.0` (or run this workflow manually) to publish.
+# Then push a version tag like `v0.1.0` (or run this workflow manually) to publish.
 
 on:
   push:
-    tags: ["v*"]
+    # Only real version tags publish. NOT a bare "v*" — that also matches the rolling
+    # `v0` Action tag, so moving `v0` onto a release commit used to re-trigger a
+    # duplicate publish that failed (a red X) once the files already existed.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
 
 jobs:
@@ -35,5 +38,8 @@ jobs:
       # so publishing needs no third-party action at all. `--trusted-publishing always`
       # fails loudly if the OIDC token is unavailable instead of falling back to
       # token auth.
+      # --check-url lets uv skip files already on the index instead of erroring, so a
+      # re-run, a manual dispatch, or a transient 5xx mid-upload (where some files
+      # landed) degrades to a clean no-op rather than a failed run.
       - name: Publish to PyPI
-        run: uv publish --trusted-publishing always
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/probelock/
