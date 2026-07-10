@@ -175,3 +175,22 @@ def test_json_mode_probes_are_opt_in():
     assert p.response_format["type"] == "json_schema"
     assert p.response_format["json_schema"]["schema"] == p.schema
     assert p.id.startswith("json_mode::")
+
+
+def test_synth_value_terminates_on_recursive_ref():
+    # a self-referential $ref (Pydantic tree/linked-list model) must not RecursionError
+    schema = {"type": "object", "required": ["root"],
+              "properties": {"root": {"$ref": "#/$defs/Node"}},
+              "$defs": {"Node": {"type": "object", "required": ["child"],
+                                 "properties": {"child": {"$ref": "#/$defs/Node"}}}}}
+    value = synth_value(schema)  # bounded depth -> returns, does not blow the stack
+    assert isinstance(value, dict)
+
+
+def test_derive_probes_handles_recursive_tool_schema():
+    tools = [{"type": "function", "function": {"name": "build_tree", "description": "t",
+              "parameters": {"type": "object", "required": ["root"],
+                             "properties": {"root": {"$ref": "#/$defs/Node"}},
+                             "$defs": {"Node": {"type": "object", "required": ["child"],
+                                                "properties": {"child": {"$ref": "#/$defs/Node"}}}}}}}]
+    assert derive_probes(tools)  # no RecursionError

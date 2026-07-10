@@ -17,6 +17,7 @@ from rich.table import Table
 from . import __version__
 from .clients import AnyLlmClient, ClientError, HttpClient, LiteLlmClient, SimulatedClient
 from .diff import diff_lockfiles, error_derived_negative_capabilities, model_family
+from .doctor import drift, mined_frozen_tools, toolset_health, traces_frozen_tools
 from .ingest import FORMATS, REDACT_PATTERNS, MiningConfig, ingest_files
 from .lockfile import read_lockfile, write_lockfile
 from .mined import (
@@ -179,6 +180,17 @@ def _require_probe_source(tools, traces, mined) -> None:
         raise typer.Exit(2)
 
 
+def _derive_or_exit(tool_list, json_mode: bool):
+    """Derive the schema battery, converting a bad toolset (duplicate names, or a
+    pathological recursive schema) into a clean Exit(2) — never an uncaught traceback
+    that would exit 1, the code the contract reserves for a gate regression."""
+    try:
+        return derive_probes(tool_list, json_mode=json_mode)
+    except (ValueError, RecursionError) as exc:
+        _err(f"Invalid tools file: {exc}")
+        raise typer.Exit(2)
+
+
 @app.command()
 def derive(
     tools: Optional[Path] = _TOOLS_OPTION,
@@ -188,7 +200,7 @@ def derive(
 ) -> None:
     """Show the probe battery that would be generated from a toolset (transparency)."""
     _require_probe_source(tools, traces, mined)
-    probes = derive_probes(_load_tools_or_exit(tools), json_mode=json_mode) if tools is not None else []
+    probes = _derive_or_exit(_load_tools_or_exit(tools), json_mode) if tools is not None else []
     if traces is not None:
         probes = probes + derive_traced_probes(_load_traces_or_exit(traces))
     if mined is not None:
@@ -240,7 +252,7 @@ def probe(
     _require_probe_source(tools, traces, mined)
     if tools is not None:
         tool_list = _load_tools_or_exit(tools)
-        probes = derive_probes(tool_list, json_mode=json_mode)
+        probes = _derive_or_exit(tool_list, json_mode)
         fingerprint = tools_fingerprint(tool_list)
     else:
         # Trace-only run: traced/mined probes replay their own embedded tool
@@ -380,7 +392,13 @@ def probe(
             )
 
     if out is not None:
-        write_lockfile(lock, out)
+        try:
+            write_lockfile(lock, out)
+        except OSError as exc:
+            # An unwritable --out is an environment/input problem, not a regression —
+            # exit 2, never 1 (which the contract reserves for a gate regression).
+            _err(f"Could not write lockfile {out}: {exc}")
+            raise typer.Exit(2)
         console.print(f"[green]wrote[/] {out}")
 
 
@@ -480,7 +498,9 @@ def ingest(
     except OSError as exc:
         _err(f"Could not read log file: {exc}")
         raise typer.Exit(2)
-    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+    except (json.JSONDecodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        # Malformed traffic logs are user input, not a probelock bug: any parse-time
+        # error exits 2 with a clean message rather than a traceback (1.0 standard).
         _err(f"Invalid log file: {exc}")
         raise typer.Exit(2)
 
@@ -1256,6 +1276,52 @@ def trend(
         _render_trend(result, locks)
 
 
+@app.command()
+def doctor(
+    tools: Path = typer.Option(..., "--tools", "-t", help="OpenAI-style tools JSON file to check."),
+    mined: Optional[Path] = typer.Option(
+        None, "--mined", help="Mined probes file to check for schema drift against --tools."
+    ),
+    traces: Optional[Path] = typer.Option(
+        None, "--traces", help="Trace-export file to check for schema drift against --tools."
+    ),
+    strict: bool = typer.Option(
+        False, "--strict", help="Exit 1 on warnings too (not just drift errors) — for CI."
+    ),
+) -> None:
+    """Health-check a toolset and detect probe/tool drift.
+
+    Reports a weak toolset (too few tools, unconstrained arguments) and, when --mined or
+    --traces is given, tools whose schema changed since a probe was minted (a gate
+    failure that is really drift, not a regression). Exit 1 if a frozen probe can never
+    match a removed/renamed tool (or on any finding under --strict); exit 2 on bad input.
+    """
+    tool_list = _load_tools_or_exit(tools)
+    findings = list(toolset_health(tool_list))
+    if mined is not None:
+        # Drift is a property of a probe's FROZEN schema, independent of review status —
+        # check every mined probe, not just accepted ones, or a freshly-ingested
+        # (all-pending) file would falsely report "no issues".
+        findings += drift(tool_list, mined_frozen_tools(_load_mined_or_exit(mined)))
+    if traces is not None:
+        findings += drift(tool_list, traces_frozen_tools(_load_traces_or_exit(traces)))
+
+    errors = [f for f in findings if f.level == "error"]
+    warns = [f for f in findings if f.level == "warn"]
+    for f in errors:
+        console.print(f"[bold red]✗[/] [red]{escape(f.message)}[/]")
+    for f in warns:
+        console.print(f"[yellow]⚠ {escape(f.message)}[/]")
+    if not findings:
+        console.print("[green]✓ no issues found[/]")
+
+    console.print(
+        f"\n[bold]{len(errors)} error(s), {len(warns)} warning(s).[/]"
+    )
+    if errors or (strict and warns):
+        raise typer.Exit(1)
+
+
 _TEMPLATE_TOOLS = """\
 [
   {
@@ -1289,18 +1355,19 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       # Point --endpoint at your model server. CI needs network access to it
       # (a hosted endpoint, or a self-hosted runner with Ollama/llama.cpp).
-      # Uses the published `probelock` from PyPI. To pin an unreleased revision,
-      # replace `uvx probelock` with:
+      # Uses the published `probelock` from PyPI, pinned to the 1.x line so a future 2.x
+      # (which may change the lockfile format / scoring) is never pulled silently. To pin
+      # an unreleased revision, replace `uvx 'probelock>=1,<2'` with:
       #   uvx --from git+https://github.com/kelkalot/probelock probelock ...
       - name: Probe candidate
-        run: uvx probelock probe --tools probelock.tools.json
+        run: uvx 'probelock>=1,<2' probe --tools probelock.tools.json
              --endpoint "$LLM_ENDPOINT" --model "$LLM_MODEL"
              --samples 5 --temperature 0.7 -o candidate.lock
         env:
           LLM_ENDPOINT: ${{ secrets.LLM_ENDPOINT }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
       - name: Gate on regression
-        run: uvx probelock gate --baseline probelock.lock --candidate candidate.lock
+        run: uvx 'probelock>=1,<2' gate --baseline probelock.lock --candidate candidate.lock
              --max-drop 0.05 --confidence 0.95
 """
 
@@ -1319,8 +1386,13 @@ def init(
         if target.exists() and not force:
             console.print(f"[yellow]exists, skipped[/] {target} (use --force)")
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        except OSError as exc:
+            # An unwritable --path is an environment problem — exit 2, never 1.
+            _err(f"Could not create {target}: {exc}")
+            raise typer.Exit(2)
         console.print(f"[green]created[/] {target}")
     console.print(
         "\nNext: probe your model and commit the baseline, then gate candidates in CI:\n"

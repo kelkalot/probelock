@@ -842,3 +842,40 @@ def test_embeddings_malformed_200_falls_back_to_hash(tmp_path, monkeypatch):
     probes, _ = _mine(tmp_path, records, cluster="embeddings",
                       embed_endpoint="http://127.0.0.1:9/v1", embed_model="m")
     assert [p for p in probes if p.category == "schema_validity"]  # fell back, still mined
+
+
+def test_otel_malformed_container_elements_do_not_crash(tmp_path):
+    # non-dict elements in the OTLP nesting must be skipped, not traceback
+    doc = {"resourceSpans": ["not a dict", {"scopeSpans": ["nope", {"spans": [
+        {"traceId": "t", "name": "chat", "attributes": [
+            {"key": "gen_ai.prompt", "value": {"stringValue": json.dumps(
+                [{"role": "user", "content": "hi"}])}},
+            {"key": "gen_ai.completion", "value": {"stringValue": json.dumps(
+                [{"role": "assistant", "content": "hello"}])}}]},
+        "also not a dict"]}]}]}
+    f = tmp_path / "o.json"
+    f.write_text(json.dumps(doc))
+    exchanges, _ = load_exchanges(f, "otel-genai")  # must not raise
+    assert len(exchanges) == 1 and exchanges[0].response.content == "hello"
+
+
+def test_otel_one_malformed_span_is_isolated_not_fatal(tmp_path):
+    # a single bad span must be skipped+counted, the good ones still mined (per-span
+    # isolation, mirroring the JSONL per-line skip)
+    def span(tid, content):
+        return {"traceId": tid, "name": "chat", "attributes": [
+            {"key": "gen_ai.prompt", "value": {"stringValue": json.dumps(
+                [{"role": "user", "content": "hi"}])}},
+            {"key": "gen_ai.completion", "value": {"stringValue": json.dumps(
+                [{"role": "assistant", "content": content}])}}]}
+    bad = {"traceId": "t2", "name": "chat", "attributes": [
+        {"key": "gen_ai.prompt.0.role", "value": {"stringValue": "user"}},
+        {"key": "gen_ai.prompt.0.content", "value": {"stringValue": "hi"}},
+        {"key": "gen_ai.completion.0.role", "value": {"stringValue": "assistant"}},
+        {"key": "gen_ai.completion.0.tool_calls", "value": {"stringValue": "5"}}]}  # non-list
+    doc = {"resourceSpans": [{"scopeSpans": [{"spans": [span("t1", "ok"), bad, span("t3", "yo")]}]}]}
+    f = tmp_path / "o.json"
+    f.write_text(json.dumps(doc))
+    exchanges, summary = load_exchanges(f, "otel-genai")  # must not raise
+    assert len(exchanges) == 2
+    assert summary.skipped.get("malformed") == 1

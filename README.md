@@ -186,7 +186,7 @@ checks for a given tool) hit the network once. The `SimulatedClient` crafts corr
 incorrect responses that the real scorers grade, so the scoring path runs even
 with no model present.
 
-## Deriving probes from real traces (experimental)
+## Deriving probes from real traces (beta)
 
 Schema-derived probes are single-turn and synthetic — great for catching schema-level
 regressions, blind to what breaks after several turns of real context, a tool result
@@ -250,7 +250,7 @@ the regressed commit and passes on an adjacent, unrelated commit. See
 [`VALIDATION.md`](VALIDATION.md) for the test setup and results, and
 [`fixtures/gptoss_regression_trace.json`](fixtures/gptoss_regression_trace.json) to reproduce it.
 
-## Recording traffic (`probelock proxy`) (experimental)
+## Recording traffic (`probelock proxy`) (beta)
 
 If your stack does not already log requests, the recording proxy captures them with one
 line changed in the agent:
@@ -275,7 +275,7 @@ evidence, so prefer restarting between runs), `--max-size` / `--max-age` rotate
 the log, and the file is created `0600` — it holds **verbatim conversation content**;
 keep it out of version control (redaction happens later, at `ingest`).
 
-## Mining probes from raw agent logs (experimental)
+## Mining probes from raw agent logs (beta)
 
 `--traces` (above) replays a *curated* export you assembled by hand. `probelock ingest`
 goes one step earlier: point it at a raw request/response log of real agent traffic —
@@ -407,7 +407,7 @@ Or use the composite GitHub Action ([`action.yml`](action.yml)), which wraps tho
 two steps end-to-end:
 
 ```yaml
-- uses: kelkalot/probelock@v0
+- uses: kelkalot/probelock@v1
   with:
     tools: tools.json
     baseline: probelock.lock
@@ -422,7 +422,25 @@ for a self-contained page):
 probelock diff probelock.lock candidate.lock --format markdown >> "$GITHUB_STEP_SUMMARY"
 ```
 
-## Roadmap
+## Stability
+
+probelock follows [semantic versioning](https://semver.org/), and a committed lockfile is
+a compatibility contract — see [STABILITY.md](STABILITY.md). In short: the schema-derived
+capability battery, their **scoring**, the lockfile format, and `diff`/`gate`/`trend` are
+**stable** and will not change incompatibly within `1.x`, so a committed baseline stays
+meaningful across upgrades. The trace subsystems above (marked *beta*) — `ingest`, the log
+adapters, `proxy`, embeddings clustering, `json_mode` — are validated but may evolve in a
+minor release, always with a [CHANGELOG.md](CHANGELOG.md) note.
+
+`probelock doctor` checks a toolset for weaknesses and detects when your committed
+trace-mined probes have drifted from the live toolset (a gate failure that is really
+drift, not a regression):
+
+```bash
+probelock doctor --tools tools.json --mined probes/mined.json
+```
+
+## Roadmap (post-1.0)
 
 - Proxy hardening: a static Go/Rust binary beside the reference Python implementation,
   and streaming-reassembly edge cases (multi-line SSE events, resume-after-disconnect).

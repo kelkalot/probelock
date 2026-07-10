@@ -56,6 +56,13 @@ class ProbeResult:
     error: Optional[str] = None  # set when the probe failed at the API level
 
 
+# Lockfile on-disk schema version — distinct from probelock_version (the tool version).
+# Bumped only on a BREAKING format change, per STABILITY.md; a reader older than the
+# file's version refuses it rather than silently mis-parsing. Committed lockfiles across
+# a 1.x series all read as LOCKFILE_FORMAT 1.
+LOCKFILE_FORMAT = 1
+
+
 @dataclass
 class Lockfile:
     label: str
@@ -69,6 +76,7 @@ class Lockfile:
     n_probes: int
     samples: int = 1  # samples per probe (>1 makes per-probe scores pass-rates)
     generated_at: Optional[str] = None
+    lockfile_format: int = LOCKFILE_FORMAT
     # Fingerprint of the trace-export file (probelock/traces.py), if any traced probes
     # were included — None when the battery is purely schema-derived. Lets a diff flag a
     # baseline/candidate pair whose real-trace inputs differ, the same way tools_fingerprint
@@ -77,6 +85,7 @@ class Lockfile:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "lockfile_format": self.lockfile_format,
             "probelock_version": self.probelock_version,
             "label": self.label,
             "model": self.model,
@@ -105,6 +114,19 @@ class Lockfile:
         callers can report a clean message instead of a stray KeyError/TypeError."""
         if not isinstance(data, dict):
             raise ValueError("lockfile must be a JSON object")
+
+        # A file written by a NEWER probelock (higher format) may use fields this reader
+        # cannot honor — refuse it clearly rather than mis-scoring a gate. A missing
+        # field means a pre-1.0 lockfile, which is format 1.
+        try:
+            fmt = int(data.get("lockfile_format", LOCKFILE_FORMAT))
+        except (TypeError, ValueError):
+            fmt = LOCKFILE_FORMAT
+        if fmt > LOCKFILE_FORMAT:
+            raise ValueError(
+                f"lockfile format {fmt} is newer than this probelock supports "
+                f"(max {LOCKFILE_FORMAT}); upgrade probelock to read it"
+            )
 
         caps_raw = data.get("capabilities") or {}
         if not isinstance(caps_raw, dict):
@@ -155,4 +177,5 @@ class Lockfile:
             samples=samples,
             generated_at=data.get("generated_at"),
             traces_fingerprint=data.get("traces_fingerprint"),
+            lockfile_format=fmt,
         )
