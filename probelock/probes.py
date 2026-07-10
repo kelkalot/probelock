@@ -119,7 +119,16 @@ def _merge_all_of(schemas: List[Dict[str, Any]], root: Dict[str, Any]) -> Dict[s
     return merged
 
 
-def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None, full: bool = False) -> Any:
+# A recursive tool schema (a $ref that resolves back to an ancestor — Pydantic emits
+# these for tree / linked-list / nested models) has no finite fully-expanded instance.
+# Bound synthesis depth so it terminates with a minimal value instead of recursing until
+# RecursionError; the value stays schema-shaped for every non-recursive schema, so this
+# never changes synthesis for the normal case.
+_SYNTH_MAX_DEPTH = 16
+
+
+def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None, full: bool = False,
+                _depth: int = 0) -> Any:
     """A schema-valid value for a property (deterministic, no randomness).
 
     Honors const/enum/$ref and basic numeric/length/array bounds, not just the
@@ -136,16 +145,20 @@ def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None, full: bool 
         return schema["const"]
     if schema.get("enum"):
         return schema["enum"][0]
+    if _depth >= _SYNTH_MAX_DEPTH:
+        # A recursive $ref has driven us past the depth bound: stop here with a minimal
+        # value rather than recursing forever.
+        return {} if schema.get("type") == "object" else "example"
     if "$ref" in schema:
         resolved = _resolve_ref(schema["$ref"], root)
         if resolved is not None:
-            return synth_value(resolved, root, full)
+            return synth_value(resolved, root, full, _depth + 1)
     if schema.get("allOf"):
-        return synth_value(_merge_all_of(schema["allOf"], root), root, full)
+        return synth_value(_merge_all_of(schema["allOf"], root), root, full, _depth + 1)
     # anyOf/oneOf: any one satisfying branch is valid, so take the first.
     for combiner in ("anyOf", "oneOf"):
         if schema.get(combiner):
-            return synth_value(schema[combiner][0], root, full)
+            return synth_value(schema[combiner][0], root, full, _depth + 1)
 
     t = schema.get("type")
     if isinstance(t, list):
@@ -162,12 +175,12 @@ def synth_value(schema: Dict[str, Any], root: Dict[str, Any] = None, full: bool 
         item = schema.get("items")
         count = schema.get("minItems", 0)
         if item:
-            return [synth_value(item, root, full) for _ in range(max(count, 1))]
+            return [synth_value(item, root, full, _depth + 1) for _ in range(max(count, 1))]
         return ["example"] * count
     if t == "object":
         props = schema.get("properties", {})
         keys = props.keys() if full else schema.get("required", [])
-        return {k: synth_value(props[k], root, full) for k in keys if k in props}
+        return {k: synth_value(props[k], root, full, _depth + 1) for k in keys if k in props}
     return "example"
 
 

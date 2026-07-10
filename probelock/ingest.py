@@ -349,12 +349,16 @@ def _iter_spans(doc: Any):
     if isinstance(doc, dict):
         if isinstance(doc.get("resourceSpans"), list):
             for rs in doc["resourceSpans"]:
+                if not isinstance(rs, dict):
+                    continue  # a malformed element must not traceback the whole run
                 scopes = rs.get("scopeSpans") or rs.get("instrumentationLibrarySpans") or []
                 for ss in scopes if isinstance(scopes, list) else []:
-                    yield from (ss.get("spans") or [])
+                    if isinstance(ss, dict):
+                        yield from (ss.get("spans") or [])
         elif isinstance(doc.get("scopeSpans"), list):
             for ss in doc["scopeSpans"]:
-                yield from (ss.get("spans") or [])
+                if isinstance(ss, dict):
+                    yield from (ss.get("spans") or [])
         elif isinstance(doc.get("spans"), list):
             yield from doc["spans"]
         elif ("spanId" in doc or "traceId" in doc) and ("name" in doc or "attributes" in doc):
@@ -526,7 +530,13 @@ def _load_otel(path, summary: MiningSummary) -> List[Exchange]:
     exchanges: List[Exchange] = []
     for span in _iter_spans(doc):
         summary.records += 1
-        ex = _parse_otel_span(span) if isinstance(span, dict) else None
+        try:
+            ex = _parse_otel_span(span) if isinstance(span, dict) else None
+        except (ValueError, TypeError, KeyError, AttributeError):
+            # One malformed span must not abort the whole export — skip it and count
+            # it, exactly as the JSONL loader isolates a bad line.
+            summary.skip("malformed")
+            continue
         if ex is None:
             summary.skip("no_genai_attrs")
         elif ex.status >= 400:

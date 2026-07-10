@@ -44,18 +44,20 @@ runs:
       # substitution happens as literal text replacement before bash ever parses this
       # script, so splicing an untrusted input value in directly would let shell
       # metacharacters in that value execute as arbitrary commands in the runner.
-      # Uses the published `probelock` from PyPI. To pin an unreleased revision,
-      # replace `uvx probelock` with
+      # Uses the published `probelock` from PyPI, constrained to the 1.x line so this
+      # `@v1` Action never silently pulls a future 2.x across the SemVer major boundary
+      # (where the lockfile format / scoring may change — see STABILITY.md). To pin an
+      # unreleased revision, replace `uvx 'probelock>=1,<2'` with
       #   `uvx --from git+https://github.com/kelkalot/probelock probelock`.
       run: |
-        uvx probelock probe \
+        uvx 'probelock>=1,<2' probe \
           --tools "$PROBELOCK_TOOLS" \
           --endpoint "$PROBELOCK_ENDPOINT" \
           --model "$PROBELOCK_MODEL" \
           --samples "$PROBELOCK_SAMPLES" \
           --temperature "$PROBELOCK_TEMPERATURE" \
           -o candidate.lock
-        uvx probelock gate \
+        uvx 'probelock>=1,<2' gate \
           --baseline "$PROBELOCK_BASELINE" \
           --candidate candidate.lock \
           --max-drop "$PROBELOCK_MAX_DROP" \

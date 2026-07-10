@@ -829,3 +829,123 @@ def test_ingest_unknown_cluster_mode_exits_2(tmp_path):
     result = runner.invoke(app, ["ingest", str(_AGENT_LOG), "--out", str(out),
                                  "--cluster", "magic"])
     assert result.exit_code == 2, result.output
+
+
+# --- doctor command -----------------------------------------------------------------
+
+
+def test_doctor_clean_toolset_exits_0():
+    result = runner.invoke(app, ["doctor", "--tools", str(TOOLS_PATH)])
+    assert result.exit_code == 0, result.output
+    assert "no issues" in result.output or "0 error" in result.output
+
+
+def test_doctor_weak_toolset_warns_but_exits_0_unless_strict(tmp_path):
+    weak = tmp_path / "weak.json"
+    weak.write_text(json.dumps([{"type": "function", "function": {
+        "name": "ping", "description": "p",
+        "parameters": {"type": "object", "properties": {"x": {"type": "string"}}}}}]))
+    result = runner.invoke(app, ["doctor", "--tools", str(weak)])
+    assert result.exit_code == 0, result.output
+    assert "warning" in result.output
+    strict = runner.invoke(app, ["doctor", "--tools", str(weak), "--strict"])
+    assert strict.exit_code == 1, strict.output
+
+
+def test_doctor_drift_removed_tool_exits_1(tmp_path):
+    mined = _ingest(tmp_path)
+    runner.invoke(app, ["traces", "review", str(mined), "--auto-accept", "schema_validity"])
+    # a toolset missing every tool the mined probes pinned
+    other = tmp_path / "other.json"
+    other.write_text(json.dumps([{"type": "function", "function": {
+        "name": "unrelated_tool", "description": "u",
+        "parameters": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}}}]))
+    result = runner.invoke(app, ["doctor", "--tools", str(other), "--mined", str(mined)])
+    assert result.exit_code == 1, result.output
+    assert "no longer in the toolset" in result.output
+
+
+def test_doctor_bad_tools_file_exits_2(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    result = runner.invoke(app, ["doctor", "--tools", str(bad)])
+    assert result.exit_code == 2, result.output
+
+
+# --- lockfile format version --------------------------------------------------------
+
+
+def test_lockfile_carries_format_version(tmp_path):
+    from probelock.models import LOCKFILE_FORMAT
+    b = tmp_path / "b.lock"
+    _write_lock(b, "m", {"tool_selection": 1.0})
+    # a probe run writes the format; here we just confirm read/gate tolerate a file
+    # that already carries it and one that (pre-1.0) does not
+    data = json.loads(b.read_text())
+    data["lockfile_format"] = LOCKFILE_FORMAT
+    b.write_text(json.dumps(data))
+    result = runner.invoke(app, ["gate", "-b", str(b), "-c", str(b)])
+    assert result.exit_code == 0, result.output
+
+
+def test_gate_refuses_a_newer_lockfile_format_exit_2(tmp_path):
+    b, c = tmp_path / "b.lock", tmp_path / "c.lock"
+    _write_lock(b, "m", {"tool_selection": 1.0})
+    _write_lock(c, "m", {"tool_selection": 1.0})
+    data = json.loads(c.read_text())
+    data["lockfile_format"] = 999
+    c.write_text(json.dumps(data))
+    result = runner.invoke(app, ["gate", "-b", str(b), "-c", str(c)])
+    assert result.exit_code == 2, result.output  # invalid input, not a regression
+    assert "newer" in result.output
+
+
+def test_doctor_checks_all_mined_probes_not_just_accepted(tmp_path):
+    # a freshly-ingested (all-pending) mined file whose pinned tool is gone must still
+    # be diagnosed — not falsely reported clean
+    mined = _ingest(tmp_path)  # everything pending, unreviewed
+    other = tmp_path / "other.json"
+    other.write_text(json.dumps([{"type": "function", "function": {
+        "name": "unrelated", "description": "u",
+        "parameters": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}}}]))
+    result = runner.invoke(app, ["doctor", "--tools", str(other), "--mined", str(mined)])
+    assert result.exit_code == 1, result.output  # drift caught despite no review
+    assert "no longer in the toolset" in result.output
+
+
+def test_probe_unwritable_out_exits_2_not_1(tmp_path):
+    # an unwritable --out is an environment error (exit 2), never a regression (exit 1)
+    blocker = tmp_path / "afile"
+    blocker.write_text("not a directory")
+    result = runner.invoke(app, [
+        "probe", "--tools", str(TOOLS_PATH), "--simulate", str(_SIM_Q8),
+        "-o", str(blocker / "sub" / "out.lock")])
+    assert result.exit_code == 2, result.output
+    assert "Could not write" in result.output
+
+
+def test_probe_recursive_tool_schema_exits_cleanly(tmp_path):
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps([{"type": "function", "function": {
+        "name": "build_tree", "description": "t", "parameters": {
+            "type": "object", "required": ["root"], "properties": {"root": {"$ref": "#/$defs/Node"}},
+            "$defs": {"Node": {"type": "object", "required": ["child"],
+                               "properties": {"child": {"$ref": "#/$defs/Node"}}}}}}}]))
+    result = runner.invoke(app, ["probe", "--tools", str(rec), "--simulate", str(_SIM_Q8)])
+    assert result.exit_code in (0, 2), result.output  # never a RecursionError traceback / exit 1
+
+
+def test_derive_duplicate_tool_names_exits_2(tmp_path):
+    dup = tmp_path / "dup.json"
+    dup.write_text(json.dumps([
+        {"type": "function", "function": {"name": "a", "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "a", "parameters": {"type": "object", "properties": {}}}}]))
+    result = runner.invoke(app, ["derive", "--tools", str(dup)])
+    assert result.exit_code == 2, result.output  # duplicate names -> invalid input, not a traceback
+
+
+def test_init_unwritable_path_exits_2(tmp_path):
+    blocker = tmp_path / "afile"
+    blocker.write_text("not a directory")
+    result = runner.invoke(app, ["init", "--path", str(blocker / "sub")])
+    assert result.exit_code == 2, result.output
